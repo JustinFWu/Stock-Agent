@@ -11,3 +11,4 @@ venv/
 dist/
 build/
 .ipynb_checkpoints/
+.env.example

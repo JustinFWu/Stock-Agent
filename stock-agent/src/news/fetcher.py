@@ -4,7 +4,6 @@ Supports Alpaca News API (free tier) and Tiingo.
 Stub ready for v1; wire up API keys when needed.
 """
 
-import os
 import requests
 import sys
 from pathlib import Path

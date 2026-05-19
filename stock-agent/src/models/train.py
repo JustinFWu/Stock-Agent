@@ -27,6 +27,8 @@ FEATURE_COLS = [
     "atr_pct",
     "volume_ratio_20d", "volume_ratio_5d",
     "gap", "daily_range", "close_position",
+    "rs_vs_sector_5d", "rs_vs_sector_20d",
+    "news_sentiment", "news_bullish_pct", "news_bearish_pct",
 ]
 
 LABEL_COL = "up_next_week"

@@ -28,6 +28,9 @@ FORWARD_DAYS = 5  # predict 1 week ahead
 # Model settings
 CONFIDENCE_THRESHOLD = 0.65  # no-trade zone below this
 
+# News settings
+MAX_ARTICLES_PER_DAY = 5  # cap per trading day to bound LLM scoring cost; set None for uncapped
+
 # API keys (set via environment variables)
 import os
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")

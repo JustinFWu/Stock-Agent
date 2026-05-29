@@ -38,15 +38,18 @@ def get_news_alpaca(ticker: str, start: datetime, end: datetime) -> list[dict]:
     }
 
     articles: list[dict] = []
-    while True:
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
-        resp.raise_for_status()
-        body = resp.json()
-        articles.extend(body.get("news", []))
-        token = body.get("next_page_token")
-        if not token:
-            break
-        params["page_token"] = token
+    try:
+        while True:
+            resp = requests.get(url, headers=headers, params=params, timeout=15)
+            resp.raise_for_status()
+            body = resp.json()
+            articles.extend(body.get("news", []))
+            token = body.get("next_page_token")
+            if not token:
+                break
+            params["page_token"] = token
+    except requests.exceptions.RequestException as exc:
+        print(f"  Warning: Alpaca news fetch failed ({exc}); continuing with {len(articles)} article(s).")
 
     return articles
 
@@ -67,9 +70,13 @@ def get_news_tiingo(ticker: str, start: datetime, end: datetime) -> list[dict]:
         "sortBy": "publishedDate",
     }
 
-    resp = requests.get(url, headers=headers, params=params, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as exc:
+        print(f"  Warning: Tiingo news fetch failed ({exc}); continuing without Tiingo.")
+        return []
 
 
 def _parse_dt(ts: str | None) -> datetime | None:

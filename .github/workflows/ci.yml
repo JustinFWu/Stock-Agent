@@ -1,0 +1,27 @@
+name: CI
+
+# Lightweight checks for a solo repo: catch syntax errors, bad imports,
+# and lint regressions before merging into main. Add a pytest step here
+# once a test suite exists.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint (ruff)
+        run: ruff check stock-agent/src
+
+      - name: Byte-compile (syntax check)
+        run: python -m compileall -q stock-agent/src

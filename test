@@ -1,0 +1,37 @@
+  2. Point-in-time correctness — mostly good, but three gaps
+
+  The good (clearly designed for this):
+  - All technical/RS features are backward-looking (pct_change, rolling, shift(+), ewm) — technical.py,
+  relative_strength.py. Each row depends only on data ≤ that day. ✓
+  - News is explicitly aligned to avoid look-ahead: _effective_trading_day (pipeline.py:48) rolls any
+  headline published after the 16:00 ET close to the next trading day, so a day's news_sentiment only
+  reflects news its close could actually have seen. This matches your "leakage-free" rework commit. ✓
+  - The model is fit only on the train fold — no global scaler/encoder fit on all data, so no preprocessing  leakage. ✓
+
+  Gap A — train/test boundary leakage in walk-forward (real, inflates metrics).
+  There's no embargo/purge between folds. train = df.iloc[:i*fold_size], test = df.iloc[i*fold_size:…]
+  (train.py:56-57). The label is close.shift(-5) (target.py:20), so the last 5 training rows have labels
+  computed from prices that fall inside the test window. The model is trained on information from the test
+  period → optimistically biased AUC. Fix: drop the last FORWARD_DAYS rows of each train fold (a
+  purge/embargo gap).
+
+  Gap B — pipeline predicts on a stale row.
+  In pipeline.py:153, latest = df.dropna().iloc[-1] runs after add_label (pipeline.py:139→ via earlier
+  add_label at pipeline.py:134). Since add_label leaves up_next_week/future_return as NaN for the last 5
+  rows, dropna() discards them — so the "latest" prediction is actually ~5 trading days old. The API path
+  avoids this (it never calls add_label before predicting — api/main.py:47-50), which makes the two entry
+  points inconsistent. Fix: in the pipeline, select the latest row by dropping NaN on feature columns only,  not the label.
+
+  Gap C — subtle LLM look-ahead (lower confidence).
+  Headlines are scored by claude-haiku-4-5-20251001 (sentiment.py:23). The model's own training data may
+  "know" how a stock moved after a given headline, so its sentiment score can embed hindsight that wasn't
+  available at the time. The data-pipeline timing is correct (Gap A/B aside), but this is a model-knowledge  form of leakage that per-day alignment can't remove. Hard to eliminate fully; worth being aware of when
+  interpreting the news features' importance.
+
+  ---
+  If you want, I can:
+  1. Add the embargo to walk_forward_validate (Gap A) — small, contained fix.
+  2. Fix the stale-prediction bug in the pipeline (Gap B).
+  3. Build a real backtest — apply the 0.65 no-trade rule across the walk-forward test folds, use
+  future_return to compute returns, and report hit rate / cumulative return / Sharpe / drawdown (with an
+  optional cost-per-trade param).

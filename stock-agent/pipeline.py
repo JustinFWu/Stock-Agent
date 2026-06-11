@@ -18,7 +18,7 @@ from src.data.fetcher import fetch_and_save, load_bars
 from src.features.technical import build_features
 from src.features.relative_strength import add_relative_strength
 from src.labels.target import add_label
-from src.models.train import walk_forward_validate, walk_forward_backtest, train_final_model
+from src.models.train import walk_forward_validate, walk_forward_backtest, train_final_model, get_available_features
 from src.models.predict import predict
 from src.data.universe import BENCHMARK, SECTOR_MAP
 from src.news.fetcher import get_dated_headlines
@@ -149,9 +149,13 @@ def run(ticker: str, validate: bool = False):
         print("\n[4/5] Training model on all data...")
         train_final_model(df, ticker)
 
-    # 5. Predict
+    # 5. Predict — use the most recent row with complete FEATURES, not labels.
+    # add_label leaves the last FORWARD_DAYS rows' labels NaN; a blanket dropna() would
+    # discard them and predict on a ~FORWARD_DAYS-stale bar (and disagree with the API,
+    # which never adds labels before predicting).
     print("\n[5/5] Predicting...")
-    latest = df.dropna().iloc[-1]
+    feature_cols = get_available_features(df)
+    latest = df.dropna(subset=feature_cols).iloc[-1]
     result = predict(ticker, latest)
     print(f"\n  Ticker:     {result.ticker}")
     print(f"  Signal:     {result.signal}")

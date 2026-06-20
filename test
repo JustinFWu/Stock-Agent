@@ -1,124 +1,42 @@
- Investigation — you're right about Vanguard
+Short answer: build the one pooled model now and start with 
+  pick-a-ticker, but plan for cross-sectional ranking as the real payoff.
+  They aren't actually a fork in training — both consume the same
+  pooled_xgb.joblib. The only difference is what you do with the scores at
+  inference. So you don't have to commit the model to either; you commit  the consumption layer, and you can add the second one later without
+  retraining.
+  Here's the reasoning, because the distinction matters more than it looks:
+  Pick-a-ticker uses an absolute threshold — "is P(up) ≥ 0.65?" That
+  demands the probability be well-calibrated in absolute terms, which is
+  the single hardest thing to get right and is exactly where single-name
+  models fall apart. A model can be genuinely useful and still rarely cross  0.65, so you'd see lots of NO_TRADE.
 
-  I ran walk-forward validation offline (technical features only, no news) across all five cached
-  tickers:
+  Cross-sectional ranking only needs the scores to be correctly ordered
+  across stocks on the same day — "rank all 90 today, go long the top few,
+  short the bottom few." That's a strictly weaker, more achievable
+  requirement than absolute calibration, and it's the standard quant use of  a pooled model precisely because relative ranking survives where
+  absolute probability doesn't. It also gets you a more honest evaluation:
+  "did the top basket beat the bottom basket?" is a money question, unlike
+  AUC.
 
-  ┌────────────────────────┬──────────┬──────────────────────────────┬─────────┐
-  │         Ticker         │ Mean AUC │        Per-fold AUCs         │ Up-rate │
-  ├────────────────────────┼──────────┼──────────────────────────────┼─────────┤
-  │ VOO (Vanguard S&P 500) │ 0.588    │ 0.58, 0.44, 0.73, 0.64, 0.54 │ 0.61    │
-  ├────────────────────────┼──────────┼──────────────────────────────┼─────────┤
-  │ SPY (S&P 500)          │ 0.569    │ 0.63, 0.47, 0.70, 0.61, 0.43 │ 0.61    │
-  ├────────────────────────┼──────────┼──────────────────────────────┼─────────┤
-  │ AAPL                   │ 0.489    │ 0.47, 0.61, 0.38, 0.45, 0.54 │ 0.55    │
-  ├────────────────────────┼──────────┼──────────────────────────────┼─────────┤
-  │ TSLA                   │ 0.489    │ 0.30, 0.58, 0.50, 0.67, 0.39 │ 0.48    │
-  ├────────────────────────┼──────────┼──────────────────────────────┼─────────┤
-  │ XLY                    │ 0.443    │ 0.26, 0.54, 0.46, 0.47, 0.49 │ 0.56    │
-  └────────────────────────┴──────────┴──────────────────────────────┴─────────┘
+  So if the actual goal is making money on single names, ranking is the
+  better-suited design — that's where a pooled model's edge actually lives.
+  My recommendation, in order:
 
-  Your memory is correct — VOO scores ~0.59, clearly above chance. And the key finding: this gap
-  exists with no news features at all. So whatever drags individual stocks below 0.5, it is not
-  primarily the news-sentiment code.
+  1. Now: one pooled model + pooled walk-forward AUC + the holdout check.
+  This just answers "did pooling create signal at all?" Don't build either
+  consumption layer until that number moves off ~0.49 — if it doesn't,
+  neither inference style will save it.
+  2. Keep pick-a-ticker as the default inference for the existing API/CLI,
+  because it's already your product surface and it's a near-zero change
+  (load the pooled model instead of the per-ticker one).
+  3. Add cross-sectional ranking as a second, thin layer on top of the same  model once the pooled AUC justifies it — a "rank the universe today,
+  here are the top longs/shorts" view. That's where you'd actually expect
+  an edge, but it's also a bigger product change (you're now outputting a
+  basket, not a per-ticker signal), so it shouldn't gate the first
+  measurement.
 
-  What's actually dragging single stocks to ~chance
-
-  It's not one bug — it's structural:
-
-  1. Asset type is the dominant factor. Broad index ETFs (VOO/SPY) are smooth and
-  momentum-persistent, so technical features carry real signal (~0.57–0.59). Individual names
-  (AAPL/TSLA) are idiosyncratic and news-driven — 5-day direction from pure technicals is close to  unpredictable. This is the expected real-world result, not a defect.
-  2. Tiny samples → noise that dips below 0.5. Each fold tests only ~74 rows. Look at the per-fold  swings: TSLA goes 0.30 → 0.67. That's sampling noise sloshing around 0.5; some folds land below
-  by chance, pulling the mean under. A sub-0.5 mean here means "no signal," not "anti-signal."
-  3. Likely overfitting. 200 trees at depth 4 on ~370 training rows with 25 features will memorize  noise and generalize at ~chance on single names. (It doesn't hurt the indices because there's
-  genuine signal to find.)
-
-  What this means for the news "bug" in your project memory
-
-  The memory note attributes the sub-0.5 to per-row news sentiment, but the offline evidence shows  the sub-0.5 on individual stocks is already present without news — so that attribution is at
-  least incomplete. I couldn't reproduce the news path here (it needs the live news + Anthropic
-  API), so I can't rule out that news makes it worse online — but it's clearly not the root cause
-  of the index-vs-stock gap. I'd treat the memory note as needing revision.
-
-  Where the real leverage is (if the goal is to beat chance on single stocks)
-
-  - Pool multiple tickers into one model — biggest lever. ~500 rows/ticker is too few; a
-  cross-sectional model trained on many names has far more data and learns patterns that
-  generalize.
-  - More history per ticker (longer than 2y).
-  - Simpler / regularized model (fewer/shallower trees, higher min_child_weight) to stop
-  memorizing noise.
-  - Or simply focus the product on indices, where the signal genuinely exists today.
-
-  Want me to (a) update the project-memory note to reflect that the sub-0.5 is mainly
-  asset/sample-driven, not news; (b) prototype a pooled multi-ticker model to test the "more data"  hypothesis; or (c) try a regularized model config on the single names to see if it lifts toward
-  0.5? I'd recommend (b) — it's the most likely to actually move the needle.
-
-
-
-
-
-  ##########################################################################
-  Good question — and it ties directly into what we just found. Let me split it into "can the loop
-  be built" (mechanism) vs. "will the loop reach the goal" (outcome), because they have very
-  different answers.
-
-  Mechanism — very probable
-
-  The pattern you read about is real and Claude Code actually supports it directly (there's a  /loop command — self-paced or on an interval — plus an autonomous-loop mode). The core idea is
-  simple:  
-  loop:
-    1. propose a change (feature, model config, data)
-    2. apply it
-    3. run a command that emits a success metric
-    4. compare to best-so-far → keep or revert, log it
-    5. goal met OR out of budget? → stop, else repeat
-
-  Your project is unusually well-suited to this because step 3 already exists:
-  walk_forward_validate prints a mean AUC. So the "did it get better?" signal is automatable and
-  cheap. That's the single most important prerequisite, and you have it. Mechanically, I'd put
-  this at high feasibility — it's a weekend's worth of scaffolding.
-
-  Outcome — much less certain, and not for engineering reasons
-
-  Here's the honest part. A loop optimizes; it doesn't create signal that isn't in the data. We
-  just measured that single-stock 5-day direction from technicals sits at ~chance (AAPL/TSLA ≈
-  0.49) while indices carry real signal (VOO ≈ 0.59). So:
-
-  - Goal "get VOO/SPY or a pooled model to ~0.60" → moderate-to-good chance a loop helps.
-  - Goal "get TSLA daily to AUC 0.65" → low. The loop would churn forever, because the target may
-  simply be unattainable from this data. "Until goal reached" silently becomes "until you run out
-  of budget."
-
-  So the probability isn't a property of the loop — it's a property of whether the goal is
-  achievable. Pick an attainable, measurable goal and it works; pick an aspirational one and it
-  spins.
-
-  Three caveats that specifically bite ML loops
-
-  1. The metric must be honest first. If you point the loop at a leaky AUC, it will happily chase
-  inflated numbers and "succeed" at nothing real. This is exactly why Gap A (the embargo) matters
-  before you automate — an optimizer will exploit leakage faster than a human. Fix the metric,
-  then optimize it.
-  2. Overfitting the validation set. A loop that maximizes walk-forward AUC will eventually p-hack  it — tweaking until it fits that particular validation noise. You need a held-out set of
-  tickers/dates the loop never sees, checked only at the end. Otherwise the loop's "0.58" won't
-  survive contact with new data.
-  3. Guardrails. Hard max-iterations, "stop if no improvement in N rounds," and a cost ceiling —
-  otherwise it runs indefinitely on an unsolvable goal.
-
-  How I'd actually achieve it here
-
-  1. Lock the goal as a number + a holdout, e.g. "mean embargoed walk-forward AUC ≥ 0.55 on a
-  held-out ticker basket."
-  2. Fix Gap A so the optimized metric is trustworthy.
-  3. One entry-point script that prints the metric (you're ~90% there).
-  4. A driver loop that each round proposes one change, runs the script, keeps/reverts on the
-  holdout-safe metric, and logs every trial.
-  5. Stop conditions as above.
-
-  The realistic framing: this is less "set it and a working trading model pops out" and more "an
-  automated experiment-runner that explores feature/model/config space faster than you'd do by
-  hand, on top of honest metrics." With that framing it's genuinely useful; as a magic goal-seeker  it'll disappoint.
-
-  If you want, I can scaffold a minimal version — a small experiment.py that runs the validation,
-  plus a loop driver with logging and a max-iteration guard — but I'd strongly suggest doing Gap A  first so it's optimizing a number that means something. Want me to set that up?
+  In other words: the model file is the same either way, so build that
+  first and let the measured AUC decide whether ranking is even worth
+  wiring up. Want me to proceed on that basis — collapse to one pooled
+  path, one saved model, pick-a-ticker inference — and leave a clear seam
+  where ranking can bolt on later?

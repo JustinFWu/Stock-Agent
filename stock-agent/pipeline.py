@@ -1,159 +1,69 @@
 """
-End-to-end pipeline script.
-Run this to go from zero to a prediction for any ticker.
+End-to-end pipeline — one pooled (cross-sectional) model over the whole universe.
+
+Training and validation are universe-level (not per ticker): we build one stacked
+dataset across many tickers, train a single pooled model, and validate it with a
+date-based walk-forward. Prediction is then pick-a-ticker: that one pooled model
+scores whichever ticker you ask about.
 
 Usage:
-    python pipeline.py AAPL
-    python pipeline.py AAPL --validate
+    python pipeline.py --train          # build pooled dataset, train + save the model
+    python pipeline.py --validate       # pooled walk-forward AUC + holdout-ticker check
+    python pipeline.py AAPL             # predict AAPL with the pooled model
+    python pipeline.py --train --news   # include per-day news sentiment (slow, hits the LLM)
 """
 
 import argparse
-import pandas as pd
-from datetime import datetime, timezone, timedelta, date
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.data.fetcher import fetch_and_save, load_bars
-from src.features.technical import build_features
-from src.features.relative_strength import add_relative_strength
-from src.labels.target import add_label
-from src.models.train import walk_forward_validate, walk_forward_backtest, train_final_model, get_available_features
+from src.data.dataset import build_pooled_dataset, build_ticker_frame, split_universe
+from src.models.train import (
+    walk_forward_validate,
+    walk_forward_holdout,
+    train_pooled_model,
+    get_available_features,
+)
 from src.models.predict import predict
-from src.data.universe import BENCHMARK, SECTOR_MAP
-from src.news.fetcher import get_dated_headlines
-from src.news.sentiment import sentiment_by_date
 
 
-MARKET_CLOSE_HOUR_ET = 16  # 4pm US/Eastern equity close
+def _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector):
+    """Build the pooled training dataset and return it alongside the held-out tickers."""
+    train_tickers, holdout_tickers = split_universe(holdout_per_sector=holdout_per_sector)
+    print(f"Train universe: {len(train_tickers)} tickers")
+    print(f"Holdout basket: {len(holdout_tickers)} tickers -> {holdout_tickers}")
+    train_df = build_pooled_dataset(train_tickers, with_news=with_news,
+                                    force_rebuild=force_rebuild, refetch=refetch)
+    print(f"  pooled train: {len(train_df)} rows from {train_df['ticker'].nunique()} tickers")
+    return train_df, holdout_tickers
 
 
-def _nth_sunday(year: int, month: int, n: int) -> date:
-    first = date(year, month, 1)
-    first_sunday = first + timedelta(days=(6 - first.weekday()) % 7)
-    return first_sunday + timedelta(weeks=n - 1)
+def do_validate(with_news, force_rebuild, refetch, holdout_per_sector):
+    print("\n[1/2] Building pooled dataset + walk-forward validation...")
+    train_df, holdout_tickers = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
+    walk_forward_validate(train_df)
+
+    print("\n[2/2] Holdout check on never-trained tickers...")
+    holdout_df = build_pooled_dataset(holdout_tickers, with_news=with_news,
+                                      force_rebuild=force_rebuild, refetch=refetch)
+    walk_forward_holdout(train_df, holdout_df)
 
 
-def _is_us_eastern_dst(d: date) -> bool:
-    # US DST: 2nd Sunday of March through 1st Sunday of November (stable since 2007).
-    return _nth_sunday(d.year, 3, 2) <= d < _nth_sunday(d.year, 11, 1)
+def do_train(with_news, force_rebuild, refetch, holdout_per_sector):
+    print("\n[1/1] Building pooled dataset + training the pooled model...")
+    train_df, _ = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
+    train_pooled_model(train_df)
 
 
-def _to_eastern_naive(dt_utc: datetime) -> datetime:
-    """Convert a tz-aware UTC datetime to naive US/Eastern wall-clock time."""
-    offset = timedelta(hours=-4 if _is_us_eastern_dst(dt_utc.date()) else -5)
-    return (dt_utc + offset).replace(tzinfo=None)
-
-
-def _effective_trading_day(publish_utc: datetime, trading_days: pd.DatetimeIndex) -> date | None:
-    """
-    The trading day whose close first makes a headline actionable, so the feature
-    never sees news published after that row's decision point (no look-ahead).
-    News at/before the 16:00 ET close on a trading day maps to that day; news after
-    close, or on a weekend/holiday, rolls forward to the next trading day present in
-    the index. Returns None if the news post-dates the last available bar's close.
-    """
-    et = _to_eastern_naive(publish_utc)
-    target = et.date()
-    if et.hour >= MARKET_CLOSE_HOUR_ET:
-        target = target + timedelta(days=1)
-    pos = trading_days.searchsorted(pd.Timestamp(target))
-    if pos >= len(trading_days):
-        return None
-    return trading_days[pos].date()
-
-
-def attach_news_features(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
-    """
-    Fetch historical headlines spanning df's date range and write sentiment onto the
-    trading day whose close first makes each headline actionable (see
-    _effective_trading_day) — aligning news to the exchange calendar and avoiding
-    look-ahead. The news_has_news flag (1.0 on days with coverage, else 0.0) lets the
-    model distinguish "no coverage" from genuinely neutral coverage, since both
-    otherwise collapse to a 0.0 sentiment.
-    """
-    df["news_sentiment"] = 0.0
-    df["news_bullish_pct"] = 0.0
-    df["news_bearish_pct"] = 0.0
-    df["news_has_news"] = 0.0
-
-    if df.empty:
-        return df
-
-    # Reach a few days before the first bar so weekend/holiday news that only
-    # becomes actionable on the first trading day is still fetched.
-    start = datetime.combine(df.index.min().date(), datetime.min.time(), tzinfo=timezone.utc) - timedelta(days=4)
-    end = datetime.combine(df.index.max().date(), datetime.max.time(), tzinfo=timezone.utc)
-
-    dated = get_dated_headlines(ticker, start, end)
-    print(f"      {len(dated)} headlines spanning {start.date()} -> {end.date()}")
-    if not dated:
-        return df
-
-    # Attribute each headline to its effective trading day before scoring.
-    attributed: list[tuple[date, str]] = []
-    for publish_utc, headline in dated:
-        day = _effective_trading_day(publish_utc, df.index)
-        if day is not None:
-            attributed.append((day, headline))
-
-    if not attributed:
-        return df
-
-    per_day = sentiment_by_date(ticker, attributed)
-    print(f"      sentiment computed for {len(per_day)} distinct trading days")
-
-    for d, stats in per_day.items():
-        ts = pd.Timestamp(d)
-        if ts in df.index:
-            df.at[ts, "news_sentiment"] = stats["mean_score"]
-            df.at[ts, "news_bullish_pct"] = stats["n_bullish"] / stats["count"]
-            df.at[ts, "news_bearish_pct"] = stats["n_bearish"] / stats["count"]
-            df.at[ts, "news_has_news"] = 1.0
-
-    return df
-
-
-def run(ticker: str, validate: bool = False):
+def do_predict(ticker, with_news, refetch):
     ticker = ticker.upper()
-    print(f"\n=== Pipeline for {ticker} ===")
+    print(f"\n=== Predicting {ticker} with the pooled model ===")
+    df = build_ticker_frame(ticker, with_news=with_news, refetch=refetch)
 
-    # 1. Fetch data (also fetch SPY + sector ETF for relative strength)
-    print("\n[1/5] Fetching data...")
-    fetch_and_save(BENCHMARK)
-    sector_etf = SECTOR_MAP.get(ticker)
-    if sector_etf:
-        fetch_and_save(sector_etf)
-    fetch_and_save(ticker)
-
-    # 2. Build features
-    print("\n[2/5] Building features...")
-    df = load_bars(ticker)
-    df = build_features(df)
-    df = add_relative_strength(df, ticker)
-    df = add_label(df)
-    print(f"      {len(df)} rows, {len(df.columns)} columns")
-
-    # 3. News sentiment per row
-    print("\n[3/5] Fetching historical news + scoring sentiment per day...")
-    df = attach_news_features(df, ticker)
-    n_with_news = int((df["news_sentiment"] != 0).sum())
-    print(f"      {n_with_news}/{len(df)} rows have a non-zero sentiment value")
-
-    # 4. Validate or train
-    if validate:
-        print("\n[4/5] Walk-forward validation...")
-        walk_forward_validate(df)
-        walk_forward_backtest(df)
-    else:
-        print("\n[4/5] Training model on all data...")
-        train_final_model(df, ticker)
-
-    # 5. Predict — use the most recent row with complete FEATURES, not labels.
-    # add_label leaves the last FORWARD_DAYS rows' labels NaN; a blanket dropna() would
-    # discard them and predict on a ~FORWARD_DAYS-stale bar (and disagree with the API,
-    # which never adds labels before predicting).
-    print("\n[5/5] Predicting...")
+    # Use the most recent row with complete FEATURES, not labels: add_label leaves the
+    # last FORWARD_DAYS rows' labels NaN, and a blanket dropna() would discard them and
+    # predict on a stale bar.
     feature_cols = get_available_features(df)
     latest = df.dropna(subset=feature_cols).iloc[-1]
     result = predict(ticker, latest)
@@ -164,8 +74,22 @@ def run(ticker: str, validate: bool = False):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("ticker", help="Stock ticker symbol, e.g. AAPL")
-    parser.add_argument("--validate", action="store_true", help="Run walk-forward validation instead of full train")
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("ticker", nargs="?", help="Predict this ticker with the pooled model")
+    parser.add_argument("--train", action="store_true", help="Train + save the pooled model")
+    parser.add_argument("--validate", action="store_true", help="Pooled walk-forward + holdout check")
+    parser.add_argument("--news", action="store_true", help="Include per-day news sentiment (slow, hits the LLM API)")
+    parser.add_argument("--rebuild", action="store_true", help="Ignore the per-ticker cache and rebuild every frame")
+    parser.add_argument("--refetch", action="store_true", help="Re-download OHLCV instead of reusing cached bars")
+    parser.add_argument("--holdout-per-sector", type=int, default=1, help="Tickers held out per sector (default 1)")
     args = parser.parse_args()
-    run(args.ticker, validate=args.validate)
+
+    if args.validate:
+        do_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector)
+    elif args.train:
+        do_train(args.news, args.rebuild, args.refetch, args.holdout_per_sector)
+    elif args.ticker:
+        do_predict(args.ticker, args.news, args.refetch)
+    else:
+        parser.error("give a TICKER to predict, or use --train / --validate")

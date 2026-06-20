@@ -8,7 +8,7 @@ import requests
 import sys
 from collections import defaultdict
 from pathlib import Path
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timezone, date
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, TIINGO_API_KEY, MAX_ARTICLES_PER_DAY
@@ -133,10 +133,3 @@ def get_dated_headlines(
         kept.append((dt, title))
 
     return kept
-
-
-def get_headlines(ticker: str, days_back: int = 7) -> list[str]:
-    """Recent-only convenience wrapper used by older callers."""
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days_back)
-    return [h for _, h in get_dated_headlines(ticker, start, end)]

@@ -9,12 +9,10 @@ import joblib
 import sys
 from pathlib import Path
 from xgboost import XGBClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import MODELS_DIR, FEATURES_DIR, CONFIDENCE_THRESHOLD, FORWARD_DAYS
+from config import MODELS_DIR, CONFIDENCE_THRESHOLD, FORWARD_DAYS
 
 # Feature columns to use (excludes OHLCV raw prices and label)
 FEATURE_COLS = [
@@ -46,19 +44,48 @@ def _build_model() -> XGBClassifier:
                          random_state=42, verbosity=0)
 
 
-def _walk_forward_folds(df: pd.DataFrame, feature_cols: list[str], n_splits: int = 5):
+def _date_windows(dates, n_splits: int = 5, embargo: int = FORWARD_DAYS):
     """
-    Yield (fold_index, train, test, proba) for each expanding-window split: train on all
-    rows up to the fold, test on the next block, never shuffling (time order preserved).
-    `proba` is the model's predicted probability of an up-move for each test row. Callers
-    pass an already-cleaned df (NaN labels/features dropped) and decide what to do with each
-    fold — classification metrics (validate) or a trade simulation (backtest).
+    Yield (train_dates, test_dates) for each expanding-window split over the sorted
+    UNIQUE dates — never shuffling, time order preserved. Splitting on dates (not row
+    position) is what makes this valid for a pooled multi-ticker frame: 'train on the
+    past, test on the next block' then holds across every ticker simultaneously, even
+    though many rows share each date.
+
+    Embargo: the label looks `embargo` (FORWARD_DAYS) trading days ahead, so the last
+    `embargo` train dates would have labels computed from closes inside the test block.
+    We drop those dates so train and test never overlap — without this gap, AUC is
+    inflated by leakage. (Assumes a shared trading calendar, true for US equities here.)
     """
-    fold_size = len(df) // (n_splits + 1)
+    dates = np.sort(pd.Index(dates).unique().values)
+    fold_size = len(dates) // (n_splits + 1)
+    if fold_size == 0:
+        return
     for i in range(1, n_splits + 1):
-        train = df.iloc[: i * fold_size]
-        test = df.iloc[i * fold_size : (i + 1) * fold_size]
-        if len(test) == 0:
+        train_cutoff = i * fold_size - embargo
+        if train_cutoff <= 0:
+            continue
+        train_dates = dates[:train_cutoff]
+        test_dates = dates[i * fold_size : (i + 1) * fold_size]
+        if len(test_dates) == 0:
+            continue
+        yield i, train_dates, test_dates
+
+
+def _walk_forward_folds(df: pd.DataFrame, feature_cols: list[str], n_splits: int = 5,
+                        embargo: int = FORWARD_DAYS):
+    """
+    Yield (fold_index, train, test, proba) for each date-based expanding-window split
+    (see _date_windows). `proba` is the model's predicted probability of an up-move for
+    each test row. Callers pass an already-cleaned df (NaN labels/features dropped) and
+    decide what to do with each fold — classification metrics (validate) or a trade
+    simulation (backtest). Works for a single ticker (one row per date) or a pooled
+    frame (many tickers per date).
+    """
+    for i, train_dates, test_dates in _date_windows(df.index, n_splits, embargo):
+        train = df[df.index.isin(train_dates)]
+        test = df[df.index.isin(test_dates)]
+        if len(train) == 0 or len(test) == 0:
             continue
 
         model = _build_model()
@@ -80,6 +107,8 @@ def walk_forward_validate(df: pd.DataFrame, n_splits: int = 5) -> dict:
     results = []
     for i, train, test, proba in _walk_forward_folds(df, feature_cols, n_splits):
         y_test = test[LABEL_COL]
+        if y_test.nunique() < 2:
+            continue  # AUC undefined when a fold's test set is all one class
         pred = (proba >= 0.5).astype(int)
         results.append({
             "fold": i,
@@ -228,20 +257,66 @@ def walk_forward_backtest(
     }
 
 
-def train_final_model(df: pd.DataFrame, ticker: str) -> Path:
-    """Train on all available data and save model."""
+def walk_forward_holdout(train_df: pd.DataFrame, holdout_df: pd.DataFrame,
+                         n_splits: int = 5, embargo: int = FORWARD_DAYS) -> dict:
+    """
+    The honesty check for a pooled model: does it generalize to tickers it never saw?
+
+    For each date-based fold, fit on the TRAIN-universe rows up to the cutoff and score
+    the HOLDOUT tickers' rows in the next block. So both axes stay clean: the model is
+    tested on out-of-sample dates AND out-of-sample tickers, with the same embargo as
+    walk_forward_validate. Pass holdout_df built from tickers excluded from train_df
+    (see split_universe). Report only at the very end, after all tuning is done.
+    """
+    feature_cols = [c for c in get_available_features(train_df) if c in holdout_df.columns]
+    train_df = train_df.dropna(subset=[LABEL_COL] + feature_cols)
+    holdout_df = holdout_df.dropna(subset=[LABEL_COL] + feature_cols)
+
+    all_dates = train_df.index.union(holdout_df.index)
+    results = []
+    for i, train_dates, test_dates in _date_windows(all_dates, n_splits, embargo):
+        tr = train_df[train_df.index.isin(train_dates)]
+        te = holdout_df[holdout_df.index.isin(test_dates)]
+        if len(tr) == 0 or len(te) == 0 or te[LABEL_COL].nunique() < 2:
+            continue
+        model = _build_model()
+        model.fit(tr[feature_cols], tr[LABEL_COL])
+        proba = model.predict_proba(te[feature_cols])[:, 1]
+        results.append({
+            "fold": i,
+            "auc": roc_auc_score(te[LABEL_COL], proba),
+            "n_train": len(tr),
+            "n_test": len(te),
+        })
+
+    if not results:
+        print("No evaluable holdout folds.")
+        return {"folds": []}
+
+    summary = pd.DataFrame(results)
+    print("\n=== Holdout check (never-trained tickers, out-of-sample dates) ===")
+    print(summary.to_string(index=False))
+    print(f"\nHoldout mean AUC: {summary['auc'].mean():.3f}")
+    return summary.to_dict("records")
+
+
+POOLED_MODEL_PATH = MODELS_DIR / "pooled_xgb.joblib"
+
+
+def train_pooled_model(df: pd.DataFrame) -> Path:
+    """
+    Train one model on the full pooled dataset and save it to POOLED_MODEL_PATH.
+    This single model backs pick-a-ticker prediction for every ticker (predict.py loads
+    it regardless of which ticker is asked about) — there are no longer per-ticker models.
+    """
     df = df.dropna(subset=[LABEL_COL])
     feature_cols = get_available_features(df)
     df = df.dropna(subset=feature_cols)
 
-    X = df[feature_cols]
-    y = df[LABEL_COL]
-
     model = _build_model()
-    model.fit(X, y)
+    model.fit(df[feature_cols], df[LABEL_COL])
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    path = MODELS_DIR / f"{ticker.upper()}_xgb.joblib"
-    joblib.dump({"model": model, "features": feature_cols}, path)
-    print(f"Model saved -> {path}")
-    return path
+    joblib.dump({"model": model, "features": feature_cols}, POOLED_MODEL_PATH)
+    print(f"Pooled model saved -> {POOLED_MODEL_PATH}  ({len(df)} rows, {len(feature_cols)} features)")
+    return POOLED_MODEL_PATH

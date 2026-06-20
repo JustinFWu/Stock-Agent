@@ -21,15 +21,18 @@ class Prediction:
     direction: int       # 1 = up, 0 = down
 
 
+POOLED_MODEL_PATH = MODELS_DIR / "pooled_xgb.joblib"
+
+
 def predict(ticker: str, features_row: pd.Series) -> Prediction:
     """
-    Given the latest feature row for a ticker, return a Prediction.
+    Given the latest feature row for a ticker, return a Prediction. All tickers are scored
+    by the single pooled model (pick-a-ticker inference); `ticker` only labels the result.
     """
-    path = MODELS_DIR / f"{ticker.upper()}_xgb.joblib"
-    if not path.exists():
-        raise FileNotFoundError(f"No model for {ticker}. Train first.")
+    if not POOLED_MODEL_PATH.exists():
+        raise FileNotFoundError("No pooled model. Train first: python pipeline.py --train")
 
-    artifact = joblib.load(path)
+    artifact = joblib.load(POOLED_MODEL_PATH)
     model = artifact["model"]
     feature_cols = artifact["features"]
 

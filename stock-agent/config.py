@@ -6,7 +6,6 @@ ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 FEATURES_DIR = DATA_DIR / "features"
-LABELS_DIR = DATA_DIR / "labels"
 MODELS_DIR = ROOT / "models" / "saved"
 
 # Data settings

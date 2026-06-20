@@ -103,24 +103,6 @@ def score_headline(ticker: str, headline: str, cache: dict[str, float] | None = 
     return score
 
 
-def aggregate_sentiment(ticker: str, headlines: list[str]) -> dict:
-    """Score headlines and return aggregate stats (cached)."""
-    if not headlines:
-        return {"mean_score": 0.0, "n_bullish": 0, "n_bearish": 0, "n_neutral": 0, "count": 0}
-
-    cache = _load_cache()
-    scores = [score_headline(ticker, h, cache) for h in headlines]
-    _save_cache(cache)
-
-    return {
-        "mean_score": sum(scores) / len(scores),
-        "n_bullish": sum(1 for s in scores if s > 0.2),
-        "n_bearish": sum(1 for s in scores if s < -0.2),
-        "n_neutral": sum(1 for s in scores if -0.2 <= s <= 0.2),
-        "count": len(scores),
-    }
-
-
 def sentiment_by_date(ticker: str, dated_headlines: list[tuple[date, str]]) -> dict[date, dict]:
     """
     Group headlines by date, score each, return per-date aggregate stats.

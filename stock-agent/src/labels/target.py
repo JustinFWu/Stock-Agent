@@ -22,10 +22,3 @@ def add_label(df: pd.DataFrame) -> pd.DataFrame:
     df["up_next_week"] = (future_close > df["Close"]).astype(float)
     df.loc[df["up_next_week"].isna(), "up_next_week"] = float("nan")
     return df
-
-
-def get_labeled_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop rows with NaN labels or NaN features. Ready for training."""
-    df = add_label(df)
-    df = df.dropna(subset=["up_next_week"])
-    return df

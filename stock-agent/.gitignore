@@ -1,5 +1,5 @@
 .env
-data/
+/data/
 models/saved/
 __pycache__/
 *.pyc

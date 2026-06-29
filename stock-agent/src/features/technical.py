@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import RSI_PERIOD, ATR_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL, MA_PERIODS, RETURN_HORIZONS
+from config import (RSI_PERIOD, ATR_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL,
+                    MA_PERIODS, RETURN_HORIZONS)
 
 
 def add_returns(df: pd.DataFrame) -> pd.DataFrame:
@@ -57,10 +58,13 @@ def add_macd(df: pd.DataFrame) -> pd.DataFrame:
     ema_slow = close.ewm(span=MACD_SLOW, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=MACD_SIGNAL, adjust=False).mean()
-    df["macd"] = macd_line
-    df["macd_signal"] = signal_line
-    df["macd_hist"] = macd_line - signal_line
-    df["macd_hist_slope"] = df["macd_hist"].diff(3)
+    # Price-normalized MACD: raw MACD is a dollar difference of EMAs, so a $900 stock
+    # dwarfs a $30 one for no real reason — meaningless under one pooled threshold.
+    # Dividing by price makes it scale-free and comparable across tickers.
+    df["macd_norm"] = macd_line / close
+    df["macd_signal_norm"] = signal_line / close
+    df["macd_hist_norm"] = (macd_line - signal_line) / close
+    df["macd_hist_slope_norm"] = df["macd_hist_norm"].diff(3)
     return df
 
 

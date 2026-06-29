@@ -21,7 +21,7 @@ FEATURE_COLS = [
     "sma_10_slope", "sma_20_slope", "sma_50_slope",
     "price_vs_sma_10", "price_vs_sma_20", "price_vs_sma_50",
     "rsi", "rsi_overbought", "rsi_oversold",
-    "macd", "macd_signal", "macd_hist", "macd_hist_slope",
+    "macd_norm", "macd_signal_norm", "macd_hist_norm", "macd_hist_slope_norm",
     "atr_pct",
     "volume_ratio_20d", "volume_ratio_5d",
     "gap", "daily_range", "close_position",

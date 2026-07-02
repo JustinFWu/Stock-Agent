@@ -14,10 +14,13 @@ Usage:
 """
 
 import argparse
+import numpy as np
+from datetime import date
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from config import FORWARD_DAYS
 from src.data.dataset import build_pooled_dataset, build_ticker_frame, split_universe
 from src.models.train import (
     walk_forward_validate,
@@ -39,15 +42,15 @@ def _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector):
     return train_df, holdout_tickers
 
 
-def do_validate(with_news, force_rebuild, refetch, holdout_per_sector):
-    print("\n[1/2] Building pooled dataset + walk-forward validation...")
+def do_validate(with_news, force_rebuild, refetch, holdout_per_sector, n_splits):
+    print(f"\n[1/2] Building pooled dataset + walk-forward validation ({n_splits} splits)...")
     train_df, holdout_tickers = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
-    walk_forward_validate(train_df)
+    walk_forward_validate(train_df, n_splits=n_splits)
 
     print("\n[2/2] Holdout check on never-trained tickers...")
     holdout_df = build_pooled_dataset(holdout_tickers, with_news=with_news,
                                       force_rebuild=force_rebuild, refetch=refetch)
-    walk_forward_holdout(train_df, holdout_df)
+    walk_forward_holdout(train_df, holdout_df, n_splits=n_splits)
 
 
 def do_train(with_news, force_rebuild, refetch, holdout_per_sector):
@@ -59,13 +62,26 @@ def do_train(with_news, force_rebuild, refetch, holdout_per_sector):
 def do_predict(ticker, with_news, refetch):
     ticker = ticker.upper()
     print(f"\n=== Predicting {ticker} with the pooled model ===")
-    df = build_ticker_frame(ticker, with_news=with_news, refetch=refetch)
+    # A live prediction must not run on stale bars: always pull fresh OHLCV (cheap for a
+    # single ticker — the slow part, per-headline LLM scoring, is cached across runs), so
+    # the newest bar and any recent news actually reach the model. --refetch stays a no-op
+    # override here; the bulk train/validate paths still honour it for speed.
+    df = build_ticker_frame(ticker, with_news=with_news, refetch=True)
 
     # Use the most recent row with complete FEATURES, not labels: add_label leaves the
     # last FORWARD_DAYS rows' labels NaN, and a blanket dropna() would discard them and
     # predict on a stale bar.
     feature_cols = get_available_features(df)
     latest = df.dropna(subset=feature_cols).iloc[-1]
+
+    # Even after refetching, the freshest usable bar can lag today (weekend/holiday, or a
+    # yfinance data gap). Warn if it is more than a trading week old so a silent data
+    # outage can't masquerade as a current signal.
+    bars_old = int(np.busday_count(latest.name.date(), date.today()))
+    if bars_old > FORWARD_DAYS:
+        print(f"  WARNING: newest usable bar is {latest.name.date()} ({bars_old} trading days old) — "
+              f"data may be stale (market gap or fetch issue); treat this signal with caution.")
+
     result = predict(ticker, latest)
     print(f"\n  Ticker:     {result.ticker}")
     print(f"  Signal:     {result.signal}")
@@ -83,10 +99,12 @@ if __name__ == "__main__":
     parser.add_argument("--rebuild", action="store_true", help="Ignore the per-ticker cache and rebuild every frame")
     parser.add_argument("--refetch", action="store_true", help="Re-download OHLCV instead of reusing cached bars")
     parser.add_argument("--holdout-per-sector", type=int, default=1, help="Tickers held out per sector (default 1)")
+    parser.add_argument("--splits", type=int, default=2,
+                        help="Walk-forward splits for --validate (default 2; more splits = smaller, noisier folds)")
     args = parser.parse_args()
 
     if args.validate:
-        do_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector)
+        do_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector, args.splits)
     elif args.train:
         do_train(args.news, args.rebuild, args.refetch, args.holdout_per_sector)
     elif args.ticker:

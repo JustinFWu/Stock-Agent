@@ -1,73 +1,23 @@
-============================================================
-2026-06-29: Cross-sectional feature normalization experiment
-============================================================
-Question raised: features like RSI aren't comparable across the pooled
-universe (RSI 60 is stretched for a quiet utility, normal for a growth
-name), and raw MACD is in dollar units so high-priced stocks dominate.
-Should we normalize features for the single pooled model?
+  --validate (technical only)
+  
+  ┌─────────────────────────────────┬──────────┬───────────────┐  │                                 │ Mean AUC │ Mean Accuracy │
+  ├─────────────────────────────────┼──────────┼───────────────┤  │ Walk-forward (2 splits)         │ 0.496    │ 0.503         │
+  ├─────────────────────────────────┼──────────┼───────────────┤
+  │ Holdout (never-trained tickers) │ 0.505    │ —             │
+  └─────────────────────────────────┴──────────┴───────────────┘
 
-Key fact about XGBoost: trees are invariant to monotonic transforms of a
-single feature, so a global StandardScaler / min-max does NOTHING. Only
-PER-STOCK or CROSS-SECTIONAL normalization (which changes the relative
-ordering of rows) can move the model.
+  Per fold: fold 1 AUC 0.491, fold 2 AUC 0.501 (walk-forward); holdout 0.499 / 0.511.  Essentially coin-flip — consistent with your saved note that sub‑0.5 AUC is
+  structural here, and the pooled model lands right at ~0.50.
 
-Tried three changes, kept originals alongside, A/B'd via the existing
-walk-forward + holdout (technical-only, no news):
-  1. MACD / price                   (macd_norm, fixes a real $-units bug)
-  2. Per-stock RSI z-score          (rsi_z, 63-day window)
-  3. Vol-normalized returns/slopes  (/ 20-day realized daily vol)
+  Now, the --news run — this is the decision I need from you. Network is back, so it
+  can run, but it's not free:
 
-Result (AUC):
-                      walk-forward    holdout (unseen tickers)
-  baseline (orig)        0.496           0.510
-  all 3 normalized       0.501           0.484   <- holdout WORSE
-  macd_norm only         0.499           0.508   <- neutral
-
-Conclusion: normalization did not help. The all-3 variant slightly HURT
-the honest out-of-ticker metric (-0.026). Everything sits at ~0.50 AUC,
-so the binding constraint is upstream of feature scaling — there's barely
-a signal to normalize. Confirms the ~0.49 ceiling is structural, not a
-feature-engineering problem.
-
-Decision: kept ONLY macd_norm (replacing the raw dollar MACD columns,
-since feeding dollar-denominated values into a pooled model is just wrong
-even though it's metric-neutral). Reverted rsi_z and the vol-normalized
-returns/slopes. Don't re-run this experiment expecting a different result
-unless the underlying signal/label changes first.
-
-TODO: stop tuning features against ~0.50 AUC. The next lever is the label
-/ horizon (5-day direction may be too noisy) or cross-sectional ranking
-evaluation ("did the top basket beat the bottom?"), not more feature
-scaling.
-
-
-============================================================
-2026-06-29: Do walk_forward_validate and walk_forward_holdout both
-            actually use the model? (asked: "see if both use the model")
-============================================================
-YES — both fit and score an XGBoost model. Verified in src/models/train.py:
-
-  - walk_forward_validate (~line 97) delegates folds to _walk_forward_folds
-    (~line 75), which per fold does:
-        model = _build_model()                              # train.py:91
-        model.fit(train[feature_cols], train[LABEL_COL])    # :92
-        proba = model.predict_proba(test[...])[:, 1]        # :93
-    So validate trains a fresh model each fold and scores the held-out
-    DATES of the SAME (train) universe. walk_forward_backtest reuses the
-    exact same _walk_forward_folds, so it uses the model too.
-
-  - walk_forward_holdout (~line 260) has its own loop but does the same:
-        model = _build_model()                              # train.py:282
-        model.fit(tr[feature_cols], tr[LABEL_COL])          # :283
-        proba = model.predict_proba(te[...])[:, 1]          # :284
-    Difference: it fits on TRAIN-universe rows up to the cutoff and scores
-    the HOLDOUT tickers in the next block — out-of-sample on BOTH dates
-    and tickers.
-
-Important nuance: neither loads the saved production model
-(models/saved/pooled_xgb.joblib). They each build EPHEMERAL models per
-fold via _build_model() (same XGBClassifier config). Only
-train_pooled_model() persists the joblib, and only predict.py loads it.
-So "use the model" = same model configuration/algorithm, fit per fold —
-not the on-disk artifact. Both evaluators are therefore measuring the
-model's learning procedure, which is what you want for validation.
+  - Only 23/71 news frames are cached. The other 48 must be rebuilt from scratch —
+  fetch headlines + score each through Claude Haiku. Those 48 tickers were never
+  successfully scored (they got 0 news during the DNS outage), so their headlines are  not in sentiment_cache.json — these are fresh API calls.
+  - At the ~13 min/ticker you saw during the original run, that's roughly ~10 hours
+  and real (if modest, Haiku) API cost, plus the ~9k new headlines added to the
+  cache.
+  - I can't meaningfully compare tech-vs-news until those 48 are built — if I run it
+  now without rebuilding, my new fail-safe code would just skip any that hiccup,
+  giving a lopsided 23-ticker comparison.

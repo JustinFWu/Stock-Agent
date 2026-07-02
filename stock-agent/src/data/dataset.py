@@ -24,6 +24,7 @@ from src.features.technical import build_features
 from src.features.relative_strength import add_relative_strength
 from src.labels.target import add_label
 from src.news.attach import attach_news_features
+from src.news.fetcher import NewsFetchError
 
 
 def _ensure_fetched(ticker: str, refetch: bool) -> None:
@@ -90,6 +91,9 @@ def build_pooled_dataset(
             continue
         try:
             df = build_ticker_frame(t, with_news=with_news, refetch=refetch)
+        except NewsFetchError as e:  # connectivity outage — leave uncached so it retries next run
+            bar.write(f"  skip {t} (news unavailable, not cached): {e}")
+            continue
         except Exception as e:  # skip a bad ticker, keep the rest of the universe
             bar.write(f"  skip {t}: {e}")
             continue

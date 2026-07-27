@@ -22,7 +22,7 @@ from src.data.fetcher import fetch_and_save, load_bars
 from src.data.universe import BENCHMARK, SECTOR_MAP
 from src.features.technical import build_features
 from src.features.relative_strength import add_relative_strength
-from src.labels.target import add_label
+from src.labels.target import add_label, add_cross_sectional_labels
 from src.news.attach import attach_news_features
 from src.news.fetcher import NewsFetchError
 
@@ -105,7 +105,14 @@ def build_pooled_dataset(
         raise ValueError("No ticker frames could be built for the pooled dataset.")
 
     print(f"  done: {len(frames)}/{n} tickers stacked")
-    return pd.concat(frames).sort_index()
+    pooled = pd.concat(frames).sort_index()
+
+    # Cross-sectional (relative) labels can only be computed on the stacked frame — they
+    # rank each ticker against the rest of the universe on the same date. Adding them here
+    # (rather than per-ticker in build_ticker_frame) keeps the per-ticker cache reusable
+    # and recomputes the cross-section fresh for whatever set of tickers was actually built.
+    pooled = add_cross_sectional_labels(pooled)
+    return pooled
 
 
 def split_universe(holdout_per_sector: int = 1, seed: int = 42) -> tuple[list[str], list[str]]:

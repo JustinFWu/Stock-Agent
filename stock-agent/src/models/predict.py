@@ -34,8 +34,21 @@ def predict(ticker: str, features_row: pd.Series) -> Prediction:
 
     artifact = joblib.load(POOLED_MODEL_PATH)
     model = artifact["model"]
-    feature_cols = artifact["features"]
 
+    if not hasattr(model, "predict_proba"):
+        # The pooled model is now a cross-sectional RANKING regressor (predicts demeaned
+        # 5-day return). A standalone UP/DOWN/NO_TRADE call for one ticker is meaningless
+        # for a ranker — its output only has meaning ranked against the rest of the
+        # universe on the same date. The universe-ranking prediction path is not built yet
+        # (gated on the ranking model clearing its validation gate); use
+        # `python pipeline.py --rank-validate` to evaluate the model instead.
+        raise NotImplementedError(
+            "Single-ticker predict() is retired: the pooled model is a cross-sectional "
+            "ranker. Rank a full universe by predicted demeaned return per date instead "
+            "(see cross_sectional_validate); the per-ticker prediction path is not wired yet."
+        )
+
+    feature_cols = artifact["features"]
     X = features_row[feature_cols].values.reshape(1, -1)
     proba = model.predict_proba(X)[0][1]  # probability of UP
 

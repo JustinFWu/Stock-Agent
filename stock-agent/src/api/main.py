@@ -14,7 +14,7 @@ from src.features.technical import build_features
 from src.features.relative_strength import add_relative_strength
 from src.data.dataset import build_pooled_dataset, split_universe
 from src.models.predict import predict
-from src.models.train import walk_forward_validate, walk_forward_holdout, train_pooled_model
+from src.models.train import cross_sectional_validate, walk_forward_holdout, train_pooled_model
 
 app = FastAPI(title="Stock Trend Agent", version="0.1.0")
 
@@ -87,7 +87,7 @@ def validate_model(news: bool = False):
     try:
         train_tickers, holdout_tickers = split_universe()
         train_df = build_pooled_dataset(train_tickers, with_news=news)
-        folds = walk_forward_validate(train_df)
+        folds = cross_sectional_validate(train_df)
         holdout_df = build_pooled_dataset(holdout_tickers, with_news=news)
         holdout = walk_forward_holdout(train_df, holdout_df)
         return {"folds": folds, "holdout": holdout}

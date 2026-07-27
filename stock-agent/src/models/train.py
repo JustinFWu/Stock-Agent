@@ -1,6 +1,11 @@
 """
-Training pipeline for the swing trade direction classifier.
-Uses XGBoost with walk-forward validation.
+Training pipeline for the pooled cross-sectional RANKING model.
+
+The model is an XGBoost regressor trained on the cross-sectional target
+`xs_demeaned_return` (each name's 5-day forward return minus the universe mean that
+day). It learns to ORDER names within a date — separate winners from losers — rather
+than call absolute up/down. Validation is therefore rank-based (rank IC and long/short
+spread), not classification AUC.
 """
 
 import pandas as pd
@@ -8,11 +13,10 @@ import numpy as np
 import joblib
 import sys
 from pathlib import Path
-from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
+from xgboost import XGBRegressor
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import MODELS_DIR, CONFIDENCE_THRESHOLD, FORWARD_DAYS
+from config import MODELS_DIR, FORWARD_DAYS
 
 # Feature columns to use (excludes OHLCV raw prices and label)
 FEATURE_COLS = [
@@ -29,7 +33,7 @@ FEATURE_COLS = [
     "news_sentiment", "news_bullish_pct", "news_bearish_pct", "news_has_news",
 ]
 
-LABEL_COL = "up_next_week"
+LABEL_COL = "xs_demeaned_return"  # cross-sectional target: forward return minus the day's universe mean
 
 
 def get_available_features(df: pd.DataFrame) -> list[str]:
@@ -37,11 +41,12 @@ def get_available_features(df: pd.DataFrame) -> list[str]:
     return [c for c in FEATURE_COLS if c in df.columns]
 
 
-def _build_model() -> XGBClassifier:
-    """The single XGBoost configuration shared by validation, backtest, and the saved model."""
-    return XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.05,
-                         use_label_encoder=False, eval_metric="logloss",
-                         random_state=42, verbosity=0)
+def _build_model() -> XGBRegressor:
+    """The single XGBoost configuration shared by validation and the saved model. A
+    regressor on the demeaned forward return — its output orders names within a date."""
+    return XGBRegressor(n_estimators=200, max_depth=4, learning_rate=0.05,
+                        objective="reg:squarederror",
+                        random_state=42, verbosity=0)
 
 
 def _date_windows(dates, n_splits: int = 5, embargo: int = FORWARD_DAYS):
@@ -75,12 +80,12 @@ def _date_windows(dates, n_splits: int = 5, embargo: int = FORWARD_DAYS):
 def _walk_forward_folds(df: pd.DataFrame, feature_cols: list[str], n_splits: int = 5,
                         embargo: int = FORWARD_DAYS):
     """
-    Yield (fold_index, train, test, proba) for each date-based expanding-window split
-    (see _date_windows). `proba` is the model's predicted probability of an up-move for
-    each test row. Callers pass an already-cleaned df (NaN labels/features dropped) and
-    decide what to do with each fold — classification metrics (validate) or a trade
-    simulation (backtest). Works for a single ticker (one row per date) or a pooled
-    frame (many tickers per date).
+    Yield (fold_index, train, test, score) for each date-based expanding-window split
+    (see _date_windows). `score` is the regressor's predicted demeaned 5-day return for
+    each test row — higher means "expected to out-rank its peers that day". Callers pass
+    an already-cleaned df (NaN labels/features dropped) and turn the scores into ranking
+    metrics. Works for a single ticker (one row per date) or a pooled frame (many tickers
+    per date).
     """
     for i, train_dates, test_dates in _date_windows(df.index, n_splits, embargo):
         train = df[df.index.isin(train_dates)]
@@ -90,170 +95,137 @@ def _walk_forward_folds(df: pd.DataFrame, feature_cols: list[str], n_splits: int
 
         model = _build_model()
         model.fit(train[feature_cols], train[LABEL_COL])
-        proba = model.predict_proba(test[feature_cols])[:, 1]
-        yield i, train, test, proba
+        score = model.predict(test[feature_cols])
+        yield i, train, test, score
 
 
-def walk_forward_validate(df: pd.DataFrame, n_splits: int = 5) -> dict:
+def _daily_rank_ic(oos: pd.DataFrame) -> pd.Series:
     """
-    Walk-forward validation: train on past, test on future.
-    Never shuffles — respects time order.
-    Returns aggregated classification metrics across all folds.
+    Per-date rank IC: Spearman correlation between the model's ranking score and the
+    realized forward return across that date's cross-section. Spearman == Pearson on
+    ranks, so we rank both columns within the date and correlate (no scipy needed).
+
+    Dates with fewer than 3 names, or with no spread in either column, are skipped
+    (correlation is undefined / meaningless there). Returns one IC per usable date,
+    indexed by date.
     """
-    df = df.dropna(subset=[LABEL_COL])
-    feature_cols = get_available_features(df)
-    df = df.dropna(subset=feature_cols)
-
-    results = []
-    for i, train, test, proba in _walk_forward_folds(df, feature_cols, n_splits):
-        y_test = test[LABEL_COL]
-        if y_test.nunique() < 2:
-            continue  # AUC undefined when a fold's test set is all one class
-        pred = (proba >= 0.5).astype(int)
-        results.append({
-            "fold": i,
-            "accuracy": accuracy_score(y_test, pred),
-            "precision": precision_score(y_test, pred, zero_division=0),
-            "recall": recall_score(y_test, pred, zero_division=0),
-            "auc": roc_auc_score(y_test, proba),
-            "n_train": len(train),
-            "n_test": len(test),
-        })
-
-    summary = pd.DataFrame(results)
-    print(summary.to_string(index=False))
-    print(f"\nMean AUC: {summary['auc'].mean():.3f}")
-    print(f"Mean Accuracy: {summary['accuracy'].mean():.3f}")
-    return summary.to_dict("records")
+    ics = {}
+    for day, g in oos.groupby(level=0):
+        if len(g) < 3 or g["score"].nunique() < 2 or g["future_return"].nunique() < 2:
+            continue
+        ics[day] = g["score"].rank().corr(g["future_return"].rank())
+    return pd.Series(ics, dtype=float)
 
 
-def walk_forward_backtest(
+def _daily_long_short(oos: pd.DataFrame, quantile: float = 0.2) -> pd.Series:
+    """
+    Per-date long-short spread: mean realized forward return of the top-`quantile` names
+    by score minus that of the bottom-`quantile`, forming an equal-weight, dollar-neutral
+    book each day. This is the economic payoff of the ranking, before costs.
+
+    k = round(n * quantile), floored at 1; dates too small to hold two disjoint baskets
+    (2k > n) are skipped. Returns one spread per usable date, indexed by date.
+    """
+    spreads = {}
+    for day, g in oos.groupby(level=0):
+        n = len(g)
+        k = max(1, int(round(n * quantile)))
+        if 2 * k > n:
+            continue
+        ordered = g.sort_values("score")["future_return"].values
+        short_leg = ordered[:k].mean()
+        long_leg = ordered[-k:].mean()
+        spreads[day] = long_leg - short_leg
+    return pd.Series(spreads, dtype=float)
+
+
+def cross_sectional_validate(
     df: pd.DataFrame,
     n_splits: int = 5,
-    threshold: float = CONFIDENCE_THRESHOLD,
+    quantile: float = 0.2,
     forward_days: int = FORWARD_DAYS,
-    cost_per_trade: float = 0.0,
 ) -> dict:
     """
-    Economic backtest over the same walk-forward folds as walk_forward_validate.
+    The go/no-go gate: does the model separate winners from losers within each date?
 
-    Where walk_forward_validate measures *classification* quality (AUC/accuracy),
-    this measures *money*: it applies the production decision rule to each
-    out-of-sample fold (long if proba >= threshold, short if proba <= 1 - threshold,
-    else flat — the same no-trade zone used in predict.py) and books the realized
-    forward_days return via the precomputed `future_return` label.
+    Reuses the walk-forward folds and the pooled regressor; the per-row score is the
+    predicted demeaned 5-day return. Within each date we measure:
+      * rank IC   - Spearman(score, realized forward return) across the cross-section
+      * L/S spread - top-quantile minus bottom-quantile realized forward return
 
-    Trades are non-overlapping: after entering, we skip forward_days rows so each
-    ~forward_days holding period is counted once (consecutive daily signals would
-    otherwise share most of their holding window and overstate activity).
+    Reported both per fold (to see stability, per the memory note) and pooled across all
+    OOS dates: mean rank IC, IC information ratio (mean/std — the "stable across folds"
+    check), hit rate of positive-IC days, and the long-short book's mean daily spread
+    with an annualised Sharpe.
 
-    `cost_per_trade` is a round-trip cost as a return fraction (e.g. 0.001 = 10 bps)
-    subtracted from each trade's return.
+    IMPORTANT: consecutive days' books overlap (a `forward_days`-day horizon means
+    `forward_days` overlapping books live at once), so daily spreads are autocorrelated
+    and the Sharpe is optimistic — read it as a screen, not a tradeable number.
     """
     if "future_return" not in df.columns:
-        raise ValueError(
-            "df has no 'future_return' column; call add_label() before backtesting."
-        )
+        raise ValueError("df has no 'future_return'; call add_label() before ranking.")
 
     df = df.dropna(subset=[LABEL_COL, "future_return"])
     feature_cols = get_available_features(df)
     df = df.dropna(subset=feature_cols)
 
-    # Collect out-of-sample predictions across folds, in time order. Retrains each fold
-    # exactly as walk_forward_validate does (shared _walk_forward_folds), so the economic
-    # view and the classification view agree on the regime.
-    oos_parts = [
-        pd.DataFrame(
-            {"proba": proba, "future_return": test["future_return"].values},
+    fold_rows = []
+    oos_parts = []
+    for i, _, test, score in _walk_forward_folds(df, feature_cols, n_splits):
+        part = pd.DataFrame(
+            {"score": score, "future_return": test["future_return"].values},
             index=test.index,
         )
-        for _, _, test, proba in _walk_forward_folds(df, feature_cols, n_splits)
-    ]
+        oos_parts.append(part)
+        fold_ic = _daily_rank_ic(part)
+        fold_ls = _daily_long_short(part, quantile)
+        if len(fold_ic):
+            fold_rows.append({
+                "fold": i,
+                "mean_ic": float(fold_ic.mean()),
+                "ls_spread": float(fold_ls.mean()) if len(fold_ls) else float("nan"),
+                "n_days": int(len(fold_ic)),
+                "n_rows": len(part),
+            })
 
     if not oos_parts:
-        print("No out-of-sample folds to backtest.")
-        return {"n_trades": 0, "n_oos_rows": 0}
+        print("No out-of-sample folds to rank.")
+        return {"n_days": 0}
 
     oos = pd.concat(oos_parts)
+    ic = _daily_rank_ic(oos)
+    ls = _daily_long_short(oos, quantile)
 
-    # No-trade zone in action across all out-of-sample rows.
-    n_long = int((oos["proba"] >= threshold).sum())
-    n_short = int((oos["proba"] <= (1 - threshold)).sum())
-    n_flat = len(oos) - n_long - n_short
+    mean_ic = float(ic.mean()) if len(ic) else float("nan")
+    ic_ir = float(ic.mean() / ic.std(ddof=1)) if len(ic) > 1 and ic.std(ddof=1) > 0 else float("nan")
+    ic_hit = float((ic > 0).mean()) if len(ic) else float("nan")
 
-    # Non-overlapping trade simulation in time order.
-    probas = oos["proba"].values
-    future_returns = oos["future_return"].values
-    equity = 1.0
-    curve = []
-    net_returns = []
-    i = 0
-    while i < len(oos):
-        proba = probas[i]
-        if proba >= threshold:
-            side = 1
-        elif proba <= (1 - threshold):
-            side = -1
-        else:
-            i += 1
-            continue
-        net = side * future_returns[i] - cost_per_trade
-        equity *= (1 + net)
-        net_returns.append(net)
-        curve.append(equity)
-        i += forward_days  # non-overlapping hold
+    ls_mean = float(ls.mean()) if len(ls) else float("nan")
+    ls_std = float(ls.std(ddof=1)) if len(ls) > 1 else 0.0
+    periods_per_year = 252 / forward_days
+    ls_sharpe = (ls_mean / ls_std) * np.sqrt(periods_per_year) if ls_std > 0 else float("nan")
 
-    n_trades = len(net_returns)
-    print("\n=== Economic backtest (out-of-sample, walk-forward) ===")
-    print(f"  decision rule:       long >= {threshold:.2f}, short <= {1 - threshold:.2f}, else flat")
-    print(f"  cost per trade:      {cost_per_trade:.4%}")
-    print(f"  OOS rows:            {len(oos)}  (long sig {n_long}, short sig {n_short}, no-trade {n_flat})")
-
-    if n_trades == 0:
-        print("  trades taken:        0  (every signal fell in the no-trade zone)")
-        return {"n_trades": 0, "n_oos_rows": len(oos),
-                "n_long_signals": n_long, "n_short_signals": n_short, "n_no_trade": n_flat}
-
-    rets = np.array(net_returns)
-    eq = np.array(curve)
-    hit_rate = float((rets > 0).mean())
-    cum_return = equity - 1.0
-    avg = float(rets.mean())
-    std = float(rets.std(ddof=1)) if n_trades > 1 else 0.0
-    periods_per_year = 252 / forward_days  # approximate: assumes back-to-back holds
-    sharpe = (avg / std) * np.sqrt(periods_per_year) if std > 0 else float("nan")
-    max_dd = float((eq / np.maximum.accumulate(eq) - 1.0).min())
-
-    bh_return = float("nan")
-    if "Close" in df.columns:
-        span = df.loc[oos.index[0]:oos.index[-1], "Close"]
-        if len(span) > 1 and span.iloc[0] != 0:
-            bh_return = float(span.iloc[-1] / span.iloc[0] - 1.0)
-
-    print(f"  trades taken:        {n_trades}  (non-overlapping {forward_days}-day holds)")
-    print(f"  hit rate:            {hit_rate:.1%}")
-    print(f"  avg return / trade:  {avg:.2%}")
-    print(f"  cumulative return:   {cum_return:.1%}")
-    print(f"  Sharpe (annualised): {sharpe:.2f}")
-    print(f"  max drawdown:        {max_dd:.1%}")
-    if bh_return == bh_return:  # not NaN
-        print(f"  buy & hold (span):   {bh_return:.1%}")
+    if fold_rows:
+        print("\n=== Cross-sectional ranking validation (out-of-sample, walk-forward) ===")
+        print(pd.DataFrame(fold_rows).to_string(index=False))
+    print(f"\n  ranking score:        predicted demeaned {forward_days}-day return (pooled regressor)")
+    print(f"  long/short quantile:  top/bottom {quantile:.0%} each date")
+    print(f"  rank-IC days:         {len(ic)}")
+    print(f"  mean rank IC:         {mean_ic:.4f}   (target > ~0.03)")
+    print(f"  IC info ratio:        {ic_ir:.2f}      (mean/std across days - stability)")
+    print(f"  positive-IC days:     {ic_hit:.1%}")
+    print(f"  mean L/S spread ({forward_days}d): {ls_mean:.4%}")
+    print(f"  L/S Sharpe (annual.): {ls_sharpe:.2f}   (optimistic - overlapping books; target > ~1)")
 
     return {
-        "n_trades": n_trades,
-        "n_oos_rows": len(oos),
-        "n_long_signals": n_long,
-        "n_short_signals": n_short,
-        "n_no_trade": n_flat,
-        "hit_rate": hit_rate,
-        "avg_return_per_trade": avg,
-        "cumulative_return": cum_return,
-        "sharpe": sharpe,
-        "max_drawdown": max_dd,
-        "buy_and_hold_return": bh_return,
-        "final_equity": equity,
-        "cost_per_trade": cost_per_trade,
-        "threshold": threshold,
+        "n_days": int(len(ic)),
+        "mean_ic": mean_ic,
+        "ic_ir": ic_ir,
+        "ic_hit_rate": ic_hit,
+        "ls_mean_spread": ls_mean,
+        "ls_sharpe": ls_sharpe,
+        "quantile": quantile,
+        "folds": fold_rows,
     }
 
 
@@ -262,29 +234,38 @@ def walk_forward_holdout(train_df: pd.DataFrame, holdout_df: pd.DataFrame,
     """
     The honesty check for a pooled model: does it generalize to tickers it never saw?
 
-    For each date-based fold, fit on the TRAIN-universe rows up to the cutoff and score
-    the HOLDOUT tickers' rows in the next block. So both axes stay clean: the model is
-    tested on out-of-sample dates AND out-of-sample tickers, with the same embargo as
-    walk_forward_validate. Pass holdout_df built from tickers excluded from train_df
-    (see split_universe). Report only at the very end, after all tuning is done.
+    For each date-based fold, fit on the TRAIN-universe rows up to the cutoff and rank the
+    HOLDOUT tickers' rows in the next block. So both axes stay clean: the model is tested
+    on out-of-sample dates AND out-of-sample tickers, with the same embargo as
+    cross_sectional_validate. The metric is the same rank IC — does the ordering hold up
+    on names the model never trained on? Pass holdout_df built from tickers excluded from
+    train_df (see split_universe). Report only at the very end, after all tuning is done.
     """
     feature_cols = [c for c in get_available_features(train_df) if c in holdout_df.columns]
     train_df = train_df.dropna(subset=[LABEL_COL] + feature_cols)
-    holdout_df = holdout_df.dropna(subset=[LABEL_COL] + feature_cols)
+    holdout_df = holdout_df.dropna(subset=[LABEL_COL, "future_return"] + feature_cols)
 
     all_dates = train_df.index.union(holdout_df.index)
     results = []
     for i, train_dates, test_dates in _date_windows(all_dates, n_splits, embargo):
         tr = train_df[train_df.index.isin(train_dates)]
         te = holdout_df[holdout_df.index.isin(test_dates)]
-        if len(tr) == 0 or len(te) == 0 or te[LABEL_COL].nunique() < 2:
+        if len(tr) == 0 or len(te) == 0:
             continue
         model = _build_model()
         model.fit(tr[feature_cols], tr[LABEL_COL])
-        proba = model.predict_proba(te[feature_cols])[:, 1]
+        score = model.predict(te[feature_cols])
+        part = pd.DataFrame(
+            {"score": score, "future_return": te["future_return"].values},
+            index=te.index,
+        )
+        ic = _daily_rank_ic(part)
+        if not len(ic):
+            continue
         results.append({
             "fold": i,
-            "auc": roc_auc_score(te[LABEL_COL], proba),
+            "mean_ic": float(ic.mean()),
+            "n_days": int(len(ic)),
             "n_train": len(tr),
             "n_test": len(te),
         })
@@ -296,7 +277,7 @@ def walk_forward_holdout(train_df: pd.DataFrame, holdout_df: pd.DataFrame,
     summary = pd.DataFrame(results)
     print("\n=== Holdout check (never-trained tickers, out-of-sample dates) ===")
     print(summary.to_string(index=False))
-    print(f"\nHoldout mean AUC: {summary['auc'].mean():.3f}")
+    print(f"\nHoldout mean rank IC: {summary['mean_ic'].mean():.4f}   (target > ~0.03)")
     return summary.to_dict("records")
 
 
@@ -305,9 +286,10 @@ POOLED_MODEL_PATH = MODELS_DIR / "pooled_xgb.joblib"
 
 def train_pooled_model(df: pd.DataFrame) -> Path:
     """
-    Train one model on the full pooled dataset and save it to POOLED_MODEL_PATH.
-    This single model backs pick-a-ticker prediction for every ticker (predict.py loads
-    it regardless of which ticker is asked about) — there are no longer per-ticker models.
+    Train one regressor on the full pooled dataset (target xs_demeaned_return) and save
+    it to POOLED_MODEL_PATH. The single model scores every ticker's expected demeaned
+    5-day return; that score is only meaningful once ranked against the rest of the
+    universe on the same date (see cross_sectional_validate).
     """
     df = df.dropna(subset=[LABEL_COL])
     feature_cols = get_available_features(df)

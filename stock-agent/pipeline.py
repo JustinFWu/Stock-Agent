@@ -9,6 +9,7 @@ scores whichever ticker you ask about.
 Usage:
     python pipeline.py --train          # build pooled dataset, train + save the model
     python pipeline.py --validate       # pooled walk-forward AUC + holdout-ticker check
+    python pipeline.py --rank-validate  # cross-sectional rank IC + long/short spread (the gate)
     python pipeline.py AAPL             # predict AAPL with the pooled model
     python pipeline.py --train --news   # include per-day news sentiment (slow, hits the LLM)
 """
@@ -23,8 +24,8 @@ load_dotenv()
 from config import FORWARD_DAYS
 from src.data.dataset import build_pooled_dataset, build_ticker_frame, split_universe
 from src.models.train import (
-    walk_forward_validate,
     walk_forward_holdout,
+    cross_sectional_validate,
     train_pooled_model,
     get_available_features,
 )
@@ -43,14 +44,20 @@ def _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector):
 
 
 def do_validate(with_news, force_rebuild, refetch, holdout_per_sector, n_splits):
-    print(f"\n[1/2] Building pooled dataset + walk-forward validation ({n_splits} splits)...")
+    print(f"\n[1/2] Building pooled dataset + cross-sectional ranking validation ({n_splits} splits)...")
     train_df, holdout_tickers = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
-    walk_forward_validate(train_df, n_splits=n_splits)
+    cross_sectional_validate(train_df, n_splits=n_splits)
 
-    print("\n[2/2] Holdout check on never-trained tickers...")
+    print("\n[2/2] Holdout check on never-trained tickers (rank IC)...")
     holdout_df = build_pooled_dataset(holdout_tickers, with_news=with_news,
                                       force_rebuild=force_rebuild, refetch=refetch)
     walk_forward_holdout(train_df, holdout_df, n_splits=n_splits)
+
+
+def do_rank_validate(with_news, force_rebuild, refetch, holdout_per_sector, n_splits, quantile):
+    print(f"\n[1/1] Building pooled dataset + cross-sectional ranking validation ({n_splits} splits)...")
+    train_df, _ = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
+    cross_sectional_validate(train_df, n_splits=n_splits, quantile=quantile)
 
 
 def do_train(with_news, force_rebuild, refetch, holdout_per_sector):
@@ -95,6 +102,10 @@ if __name__ == "__main__":
     parser.add_argument("ticker", nargs="?", help="Predict this ticker with the pooled model")
     parser.add_argument("--train", action="store_true", help="Train + save the pooled model")
     parser.add_argument("--validate", action="store_true", help="Pooled walk-forward + holdout check")
+    parser.add_argument("--rank-validate", action="store_true",
+                        help="Cross-sectional ranking metrics (rank IC + long/short spread) — the go/no-go gate")
+    parser.add_argument("--quantile", type=float, default=0.2,
+                        help="Top/bottom fraction per date for the long/short book (default 0.2)")
     parser.add_argument("--news", action="store_true", help="Include per-day news sentiment (slow, hits the LLM API)")
     parser.add_argument("--rebuild", action="store_true", help="Ignore the per-ticker cache and rebuild every frame")
     parser.add_argument("--refetch", action="store_true", help="Re-download OHLCV instead of reusing cached bars")
@@ -103,11 +114,14 @@ if __name__ == "__main__":
                         help="Walk-forward splits for --validate (default 2; more splits = smaller, noisier folds)")
     args = parser.parse_args()
 
-    if args.validate:
+    if args.rank_validate:
+        do_rank_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector,
+                         args.splits, args.quantile)
+    elif args.validate:
         do_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector, args.splits)
     elif args.train:
         do_train(args.news, args.rebuild, args.refetch, args.holdout_per_sector)
     elif args.ticker:
         do_predict(args.ticker, args.news, args.refetch)
     else:
-        parser.error("give a TICKER to predict, or use --train / --validate")
+        parser.error("give a TICKER to predict, or use --train / --validate / --rank-validate")

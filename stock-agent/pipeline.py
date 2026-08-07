@@ -1,127 +1,92 @@
 """
-End-to-end pipeline — one pooled (cross-sectional) model over the whole universe.
+Entry point for the volatility-forecasting stage.
 
-Training and validation are universe-level (not per ticker): we build one stacked
-dataset across many tickers, train a single pooled model, and validate it with a
-date-based walk-forward. Prediction is then pick-a-ticker: that one pooled model
-scores whichever ticker you ask about.
+    python pipeline.py --fetch           # Phase 0: pull ~20y of adjusted bars for the universe
+    python pipeline.py --vol-validate    # Phase 1 gate: xgb vs rw / ewma / har-rv
+    python pipeline.py --train-vol       # fit and save the production forecaster
 
-Usage:
-    python pipeline.py --train          # build pooled dataset, train + save the model
-    python pipeline.py --validate       # pooled walk-forward AUC + holdout-ticker check
-    python pipeline.py --rank-validate  # cross-sectional rank IC + long/short spread (the gate)
-    python pipeline.py AAPL             # predict AAPL with the pooled model
-    python pipeline.py --train --news   # include per-day news sentiment (slow, hits the LLM)
+Direction (which names, long or short) is not decided here — that is Phase 3's
+momentum signal. This stage answers only "how volatile is each name about to be",
+which is what the sizing layer needs.
 """
 
 import argparse
-import numpy as np
-from datetime import date
+import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from config import FORWARD_DAYS
-from src.data.dataset import build_pooled_dataset, build_ticker_frame, split_universe
-from src.models.train import (
-    walk_forward_holdout,
-    cross_sectional_validate,
-    train_pooled_model,
-    get_available_features,
-)
-from src.models.predict import predict
+from src.data.dataset import build_pooled_dataset
+from src.data.fetcher import fetch_and_save, is_current
+from src.data.universe import ALL_TICKERS, BENCHMARK
+from src.models.vol_forecast import validate_vol_forecast, train_vol_model
 
 
-def _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector):
-    """Build the pooled training dataset and return it alongside the held-out tickers."""
-    train_tickers, holdout_tickers = split_universe(holdout_per_sector=holdout_per_sector)
-    print(f"Train universe: {len(train_tickers)} tickers")
-    print(f"Holdout basket: {len(holdout_tickers)} tickers -> {holdout_tickers}")
-    train_df = build_pooled_dataset(train_tickers, with_news=with_news,
-                                    force_rebuild=force_rebuild, refetch=refetch)
-    print(f"  pooled train: {len(train_df)} rows from {train_df['ticker'].nunique()} tickers")
-    return train_df, holdout_tickers
+def do_fetch(refetch: bool) -> None:
+    """Pull bars for the whole universe plus the benchmark, skipping what is already current."""
+    tickers = ALL_TICKERS + [BENCHMARK]
+    print(f"Fetching {len(tickers)} tickers...")
+
+    fetched, skipped, failed = 0, 0, []
+    for ticker in tickers:
+        if not refetch and is_current(ticker):
+            skipped += 1
+            continue
+        try:
+            df = fetch_and_save(ticker)
+            fetched += 1
+            print(f"  {ticker:<6} {len(df):>5,} bars  {df.index[0].date()} -> {df.index[-1].date()}")
+        except Exception as e:
+            failed.append(ticker)
+            print(f"  {ticker:<6} FAILED: {e}")
+
+    print(f"\nFetched {fetched}, already current {skipped}, failed {len(failed)}")
+    if failed:
+        print(f"Failed tickers: {', '.join(failed)}")
 
 
-def do_validate(with_news, force_rebuild, refetch, holdout_per_sector, n_splits):
-    print(f"\n[1/2] Building pooled dataset + cross-sectional ranking validation ({n_splits} splits)...")
-    train_df, holdout_tickers = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
-    cross_sectional_validate(train_df, n_splits=n_splits)
+def do_vol_validate(n_splits: int, force_rebuild: bool, refetch: bool) -> None:
+    print("\n[1/2] Building pooled dataset...")
+    df = build_pooled_dataset(ALL_TICKERS, force_rebuild=force_rebuild, refetch=refetch)
 
-    print("\n[2/2] Holdout check on never-trained tickers (rank IC)...")
-    holdout_df = build_pooled_dataset(holdout_tickers, with_news=with_news,
-                                      force_rebuild=force_rebuild, refetch=refetch)
-    walk_forward_holdout(train_df, holdout_df, n_splits=n_splits)
+    print("\n[2/2] Walk-forward volatility forecast comparison...")
+    validate_vol_forecast(df, n_splits=n_splits)
 
 
-def do_rank_validate(with_news, force_rebuild, refetch, holdout_per_sector, n_splits, quantile):
-    print(f"\n[1/1] Building pooled dataset + cross-sectional ranking validation ({n_splits} splits)...")
-    train_df, _ = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
-    cross_sectional_validate(train_df, n_splits=n_splits, quantile=quantile)
+def do_train_vol(kind: str, force_rebuild: bool, refetch: bool) -> None:
+    print("\n[1/2] Building pooled dataset...")
+    df = build_pooled_dataset(ALL_TICKERS, force_rebuild=force_rebuild, refetch=refetch)
 
-
-def do_train(with_news, force_rebuild, refetch, holdout_per_sector):
-    print("\n[1/1] Building pooled dataset + training the pooled model...")
-    train_df, _ = _build_training_pool(with_news, force_rebuild, refetch, holdout_per_sector)
-    train_pooled_model(train_df)
-
-
-def do_predict(ticker, with_news, refetch):
-    ticker = ticker.upper()
-    print(f"\n=== Predicting {ticker} with the pooled model ===")
-    # A live prediction must not run on stale bars: always pull fresh OHLCV (cheap for a
-    # single ticker — the slow part, per-headline LLM scoring, is cached across runs), so
-    # the newest bar and any recent news actually reach the model. --refetch stays a no-op
-    # override here; the bulk train/validate paths still honour it for speed.
-    df = build_ticker_frame(ticker, with_news=with_news, refetch=True)
-
-    # Use the most recent row with complete FEATURES, not labels: add_label leaves the
-    # last FORWARD_DAYS rows' labels NaN, and a blanket dropna() would discard them and
-    # predict on a stale bar.
-    feature_cols = get_available_features(df)
-    latest = df.dropna(subset=feature_cols).iloc[-1]
-
-    # Even after refetching, the freshest usable bar can lag today (weekend/holiday, or a
-    # yfinance data gap). Warn if it is more than a trading week old so a silent data
-    # outage can't masquerade as a current signal.
-    bars_old = int(np.busday_count(latest.name.date(), date.today()))
-    if bars_old > FORWARD_DAYS:
-        print(f"  WARNING: newest usable bar is {latest.name.date()} ({bars_old} trading days old) — "
-              f"data may be stale (market gap or fetch issue); treat this signal with caution.")
-
-    result = predict(ticker, latest)
-    print(f"\n  Ticker:     {result.ticker}")
-    print(f"  Signal:     {result.signal}")
-    print(f"  Confidence: {result.confidence:.1%}")
-    print(f"  Date:       {latest.name.date()}")
+    print(f"\n[2/2] Fitting the {kind} forecaster on the full history...")
+    train_vol_model(df, kind=kind)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("ticker", nargs="?", help="Predict this ticker with the pooled model")
-    parser.add_argument("--train", action="store_true", help="Train + save the pooled model")
-    parser.add_argument("--validate", action="store_true", help="Pooled walk-forward + holdout check")
-    parser.add_argument("--rank-validate", action="store_true",
-                        help="Cross-sectional ranking metrics (rank IC + long/short spread) — the go/no-go gate")
-    parser.add_argument("--quantile", type=float, default=0.2,
-                        help="Top/bottom fraction per date for the long/short book (default 0.2)")
-    parser.add_argument("--news", action="store_true", help="Include per-day news sentiment (slow, hits the LLM API)")
-    parser.add_argument("--rebuild", action="store_true", help="Ignore the per-ticker cache and rebuild every frame")
-    parser.add_argument("--refetch", action="store_true", help="Re-download OHLCV instead of reusing cached bars")
-    parser.add_argument("--holdout-per-sector", type=int, default=1, help="Tickers held out per sector (default 1)")
-    parser.add_argument("--splits", type=int, default=2,
-                        help="Walk-forward splits for --validate (default 2; more splits = smaller, noisier folds)")
+    parser.add_argument("--fetch", action="store_true",
+                        help="Download bars for the universe (Phase 0)")
+    parser.add_argument("--vol-validate", action="store_true",
+                        help="Walk-forward vol forecast vs baselines — the Phase 1 gate")
+    parser.add_argument("--train-vol", action="store_true",
+                        help="Fit and save the production vol forecaster")
+    parser.add_argument("--kind", choices=["xgb", "har"], default="xgb",
+                        help="Which forecaster --train-vol saves (default xgb; use har if the gate failed)")
+    parser.add_argument("--splits", type=int, default=5,
+                        help="Walk-forward splits (default 5)")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Ignore the per-ticker feature cache and rebuild every frame")
+    parser.add_argument("--refetch", action="store_true",
+                        help="Re-download bars instead of reusing cached ones")
     args = parser.parse_args()
 
-    if args.rank_validate:
-        do_rank_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector,
-                         args.splits, args.quantile)
-    elif args.validate:
-        do_validate(args.news, args.rebuild, args.refetch, args.holdout_per_sector, args.splits)
-    elif args.train:
-        do_train(args.news, args.rebuild, args.refetch, args.holdout_per_sector)
-    elif args.ticker:
-        do_predict(args.ticker, args.news, args.refetch)
+    if args.fetch:
+        do_fetch(args.refetch)
+    elif args.vol_validate:
+        do_vol_validate(args.splits, args.rebuild, args.refetch)
+    elif args.train_vol:
+        do_train_vol(args.kind, args.rebuild, args.refetch)
     else:
-        parser.error("give a TICKER to predict, or use --train / --validate / --rank-validate")
+        parser.error("choose one of --fetch / --vol-validate / --train-vol")
+        sys.exit(2)

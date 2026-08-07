@@ -1,0 +1,1180 @@
+<title>Vol-Targeted Momentum — Build Roadmap</title>
+
+<style>
+  :root {
+    --ground:      #F7F8FA;
+    --surface:     #FFFFFF;
+    --surface-alt: #EFF2F6;
+    --ink:         #14181F;
+    --ink-soft:    #4A5361;
+    --ink-faint:   #7C8697;
+    --rule:        #DCE1E9;
+    --accent:      #0F6E78;
+    --accent-wash: #E3F0F1;
+    --gate:        #8F6206;
+    --gate-wash:   #F7EEDC;
+    --stop:        #9E3729;
+    --stop-wash:   #F6E7E4;
+
+    --sans: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    --mono: "Cascadia Mono", Consolas, "SF Mono", "Roboto Mono", ui-monospace, monospace;
+
+    --measure: 68ch;
+    --wide: 1080px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:      #0E1116;
+      --surface:     #161B22;
+      --surface-alt: #1B222B;
+      --ink:         #E6EAF0;
+      --ink-soft:    #A3AEBD;
+      --ink-faint:   #6F7A89;
+      --rule:        #272F3A;
+      --accent:      #4FC3CE;
+      --accent-wash: #102C31;
+      --gate:        #D9A441;
+      --gate-wash:   #2B2415;
+      --stop:        #E0705F;
+      --stop-wash:   #2C1A17;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0E1116;
+    --surface:     #161B22;
+    --surface-alt: #1B222B;
+    --ink:         #E6EAF0;
+    --ink-soft:    #A3AEBD;
+    --ink-faint:   #6F7A89;
+    --rule:        #272F3A;
+    --accent:      #4FC3CE;
+    --accent-wash: #102C31;
+    --gate:        #D9A441;
+    --gate-wash:   #2B2415;
+    --stop:        #E0705F;
+    --stop-wash:   #2C1A17;
+  }
+
+  :root[data-theme="light"] {
+    --ground:      #F7F8FA;
+    --surface:     #FFFFFF;
+    --surface-alt: #EFF2F6;
+    --ink:         #14181F;
+    --ink-soft:    #4A5361;
+    --ink-faint:   #7C8697;
+    --rule:        #DCE1E9;
+    --accent:      #0F6E78;
+    --accent-wash: #E3F0F1;
+    --gate:        #8F6206;
+    --gate-wash:   #F7EEDC;
+    --stop:        #9E3729;
+    --stop-wash:   #F6E7E4;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: var(--wide);
+    margin: 0 auto;
+    padding: 0 24px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 56px;
+  }
+
+  .prose { max-width: var(--measure); }
+
+  p { margin: 0 0 0.9em; }
+  p:last-child { margin-bottom: 0; }
+
+  h1, h2, h3, .eyebrow, .label {
+    font-family: var(--sans);
+    text-wrap: balance;
+  }
+
+  h1 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.08;
+    margin: 0;
+  }
+
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 650;
+    letter-spacing: -0.012em;
+    line-height: 1.25;
+    margin: 0;
+  }
+
+  h3 {
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: -0.005em;
+    margin: 0;
+  }
+
+  .eyebrow {
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  code, .mono, .num {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  code {
+    font-size: 0.86em;
+    background: var(--surface-alt);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.08em 0.34em;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    padding-top: 64px;
+  }
+
+  .masthead .lede {
+    font-size: 1.16rem;
+    color: var(--ink-soft);
+    max-width: 58ch;
+    margin: 0;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--ink-faint);
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+  }
+  .meta b {
+    color: var(--ink-soft);
+    font-weight: 400;
+  }
+
+  .cone-frame {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 18px 20px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .cone-frame canvas {
+    display: block;
+    width: 100%;
+    height: 132px;
+  }
+  .cone-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+    font-family: var(--mono);
+    font-size: 0.71rem;
+    color: var(--ink-faint);
+  }
+  .cone-key span::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 2px;
+    margin-right: 7px;
+    vertical-align: 0.22em;
+    background: currentColor;
+  }
+  .cone-key .k-raw { color: var(--ink-faint); }
+  .cone-key .k-scaled { color: var(--accent); }
+
+  /* ---------- generic section ---------- */
+
+  section {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .section-head {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    border-top: 2px solid var(--ink);
+    padding-top: 14px;
+  }
+
+  /* ---------- layer stack ---------- */
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 760px;
+  }
+
+  .layer {
+    display: grid;
+    grid-template-columns: 148px 1fr;
+    gap: 4px 22px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 14px 18px;
+  }
+  .layer .label {
+    font-size: 0.76rem;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding-top: 2px;
+  }
+  .layer p {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--ink-soft);
+  }
+  .layer.veto { border-left-color: var(--gate); }
+  .layer.veto .label { color: var(--gate); }
+
+  .stack-note {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    max-width: 760px;
+    margin: 0;
+  }
+
+  /* ---------- phases ---------- */
+
+  .phases {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .phase {
+    display: grid;
+    grid-template-columns: 74px 1fr;
+    gap: 0 26px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 22px 24px;
+  }
+  .phase + .phase { border-top: none; }
+  .phase:first-child { border-radius: 4px 4px 0 0; }
+  .phase:last-child { border-radius: 0 0 4px 4px; }
+
+  .phase-num {
+    font-family: var(--mono);
+    font-size: 1.9rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .phase-num small {
+    display: block;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 8px;
+    font-weight: 400;
+  }
+
+  .phase.cleared { background: var(--accent-wash); }
+  .phase.cleared .gate-line {
+    background: transparent;
+    border-left-color: var(--accent);
+  }
+  .phase.cleared .gate-line b { color: var(--accent); }
+
+  .phase-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+  }
+  .cleared-badge {
+    font-family: var(--sans);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    padding: 1px 7px;
+  }
+
+  .phase-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .phase-body p { margin: 0; }
+
+  .kv {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 5px 16px;
+    font-size: 0.93rem;
+  }
+  .kv dt {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    font-weight: 650;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-top: 5px;
+  }
+  .kv dd {
+    margin: 0;
+    color: var(--ink-soft);
+  }
+
+  .gate-line {
+    background: var(--gate-wash);
+    border-left: 3px solid var(--gate);
+    border-radius: 0 3px 3px 0;
+    padding: 9px 14px;
+    font-size: 0.9rem;
+    color: var(--ink);
+  }
+  .gate-line b {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gate);
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--surface);
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    font-weight: 650;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--surface-alt);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.highlight { background: var(--accent-wash); }
+  tbody tr.highlight td { color: var(--ink); font-weight: 600; }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--gate);
+    border-radius: 0 4px 4px 0;
+    padding: 18px 22px;
+    max-width: var(--measure);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .callout p { margin: 0; font-size: 0.95rem; color: var(--ink-soft); }
+  .callout h3 { color: var(--gate); }
+  td.num { white-space: nowrap; color: var(--ink); }
+  td.path { font-family: var(--mono); font-size: 0.82rem; white-space: nowrap; }
+
+  .tag {
+    font-family: var(--sans);
+    font-size: 0.67rem;
+    font-weight: 650;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 2px;
+    white-space: nowrap;
+    display: inline-block;
+  }
+  .tag.keep    { background: var(--accent-wash); color: var(--accent); }
+  .tag.retool  { background: var(--gate-wash);   color: var(--gate); }
+  .tag.parked  { background: var(--stop-wash);   color: var(--stop); }
+
+  /* ---------- decisions ---------- */
+
+  .decisions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 2px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .decision {
+    background: var(--surface);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .decision p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+  }
+
+  /* ---------- prior result ---------- */
+
+  details {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 0;
+  }
+  summary {
+    font-family: var(--sans);
+    font-size: 0.94rem;
+    font-weight: 650;
+    padding: 15px 20px;
+    cursor: pointer;
+    color: var(--ink);
+  }
+  .details-body {
+    padding: 0 20px 20px;
+    max-width: var(--measure);
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .ic-list {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 20px;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    max-width: 460px;
+  }
+  .ic-list dt { color: var(--ink-soft); }
+  .ic-list dd { margin: 0; text-align: right; color: var(--stop); font-variant-numeric: tabular-nums; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 18px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    max-width: var(--measure);
+  }
+
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .phase { grid-template-columns: 1fr; gap: 14px; padding: 20px; }
+    .phase-num { font-size: 1.4rem; display: flex; align-items: baseline; gap: 12px; }
+    .phase-num small { margin-top: 0; }
+    .layer { grid-template-columns: 1fr; gap: 6px; }
+    .kv { grid-template-columns: 1fr; gap: 2px 0; }
+    .kv dt { padding-top: 8px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="prose" style="display:flex; flex-direction:column; gap:18px;">
+      <p class="eyebrow">Stock-Agent &middot; Build Roadmap</p>
+      <h1>Vol-targeted momentum, and the system that trades it.</h1>
+      <p class="lede">
+        The alpha search returned a clean negative. This is the pivot: stop predicting returns,
+        start predicting volatility &mdash; and put a real autonomous system underneath a strategy
+        that is documented rather than discovered.
+      </p>
+    </div>
+
+    <div class="cone-frame">
+      <canvas id="cone" width="1040" height="264" role="img"
+              aria-label="Two volatility fans: an unscaled forward-return cone widening left to right, and a vol-targeted cone held at constant width."></canvas>
+      <div class="cone-key">
+        <span class="k-raw">unscaled &mdash; risk drifts with the market</span>
+        <span class="k-scaled">vol-targeted &mdash; risk held constant by design</span>
+      </div>
+    </div>
+
+    <div class="meta">
+      <span><b>branch</b> feat/vol-targeted-momentum</span>
+      <span><b>opened</b> 2026-08-07</span>
+      <span><b>supersedes</b> cross-sectional ranking (no-go)</span>
+      <span><b>status</b> phases 0-1 cleared</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Thesis</p>
+      <h2>One problem is unwinnable. The adjacent one is not.</h2>
+    </div>
+    <div class="prose">
+      <p>
+        Forward returns on 71 US mega-caps are, as far as this repo can measure, unpredictable from
+        price history. That was tested properly and it failed properly. Volatility is a different
+        animal: realized vol is strongly autocorrelated, so a forecast of next week's vol is a
+        forecast that can actually be made &mdash; and it has direct economic value in deciding
+        position size.
+      </p>
+      <p>
+        The direction comes from somewhere honest instead. <b>12&ndash;2 momentum</b> is the most
+        replicated anomaly in the literature, holding across centuries, countries, and asset classes.
+        Its defining flaw is the momentum crash &mdash; the long/short losing 30&ndash;50% in weeks
+        coming off a market bottom. The published fix is scaling exposure by a forecast of the
+        strategy's own volatility, which roughly doubles the realized Sharpe.
+      </p>
+      <p>
+        So the two halves are not bolted together. The vol forecast is the documented remedy for
+        momentum's documented weakness. That is the thesis, and everything below is in service of
+        testing it honestly and then trading it unattended.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Architecture</p>
+      <h2>Four layers, and one of them must be dumb.</h2>
+    </div>
+
+    <div class="stack">
+      <div class="layer">
+        <span class="label">Signal</span>
+        <p>12&ndash;2 momentum over the universe. Answers <i>what</i> and <i>which direction</i>. Long-only, top decile, for v1.</p>
+      </div>
+      <div class="layer">
+        <span class="label">Sizing</span>
+        <p>Vol forecast &rarr; shrunk covariance &rarr; target weights at a fixed portfolio vol. Answers <i>how much</i>. Continuous, model-driven, allowed to be wrong.</p>
+      </div>
+      <div class="layer veto">
+        <span class="label">Risk &middot; veto</span>
+        <p>Gross and net caps, per-name and per-sector limits, drawdown kill switch, data-staleness breaker. Hard, auditable, and non-negotiable.</p>
+      </div>
+      <div class="layer">
+        <span class="label">Execution</span>
+        <p>Broker-agnostic interface. Reconcile actual positions against targets, submit the diff, log every fill. Idempotent across a mid-rebalance crash.</p>
+      </div>
+      <div class="layer">
+        <span class="label">Monitoring</span>
+        <p>Deterministic checks fire the alerts and the kill switch. An LLM may triage, summarize, and explain &mdash; never decide.</p>
+      </div>
+    </div>
+
+    <p class="stack-note">
+      Design test for the risk layer: if a limit ever becomes a penalty term inside the optimizer,
+      it has stopped being a risk control and become a suggestion.
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Sequence</p>
+      <h2>Ordered by dependency, not by appetite.</h2>
+    </div>
+    <p class="prose">
+      Each phase is numbered because each one genuinely blocks the next &mdash; every number
+      computed out of order is a number that can't be trusted. Gates are pre-committed here,
+      before any result is known, for the same reason the last no-go was trustworthy.
+    </p>
+
+    <div class="phases">
+
+      <article class="phase cleared">
+        <div class="phase-num">0<small>enabling</small></div>
+        <div class="phase-body">
+          <div class="phase-title">
+            <h3>Extend the price history to ~20 years</h3>
+            <span class="cleared-badge">Cleared</span>
+          </div>
+          <dl class="kv">
+            <dt>Deliverable</dt>
+            <dd>Split- and dividend-adjusted daily OHLCV for the 71-name universe, cached as parquet alongside the existing feature store.</dd>
+            <dt>Why here</dt>
+            <dd>12&ndash;2 momentum burns twelve months on formation. Two years of data leaves roughly one year of testable backtest &mdash; not enough to conclude anything.</dd>
+            <dt>Caveat</dt>
+            <dd>The universe is <i>today's</i> large caps, so the backtest is survivorship-biased upward. Treat its Sharpe as proof the plumbing works, never as evidence the strategy is good.</dd>
+          </dl>
+          <div class="gate-line"><b>Result</b> 82 names plus SPY, 2005-01-03 onward, zero failures.
+          Adjusted at source; verified against AAPL's split history &mdash; no bar moves more than
+          20%, so no split is being read as a return.</div>
+        </div>
+      </article>
+
+      <article class="phase cleared">
+        <div class="phase-num">1<small>research</small></div>
+        <div class="phase-body">
+          <div class="phase-title">
+            <h3>Volatility forecast</h3>
+            <span class="cleared-badge">Cleared</span>
+          </div>
+          <dl class="kv">
+            <dt>Deliverable</dt>
+            <dd>A forward realized-vol label beside <code>future_return</code>; close-to-close and Parkinson/Garman&ndash;Klass estimators; EWMA and HAR-RV baselines; the XGBoost model retargeted by swapping <code>LABEL_COL</code>.</dd>
+            <dt>Why here</dt>
+            <dd>Evaluable standalone &mdash; scored on forecast error, no backtester required. It is also the one prediction problem in this domain that is actually winnable.</dd>
+            <dt>Reuse</dt>
+            <dd><code>train.py</code> keeps <code>_build_model</code> and <code>_walk_forward_folds</code> essentially unchanged. The label swap is most of the work.</dd>
+          </dl>
+          <div class="gate-line">
+            <b>Result &mdash; pass</b> XGBoost beat EWMA and HAR-RV on both metrics, winning QLIKE
+            on all five folds and RMSE on four. Margins of 5&ndash;9%: real, consistent, and not
+            spectacular. Full numbers below.
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-num">2<small>infrastructure</small></div>
+        <div class="phase-body">
+          <h3>Backtester with real costs</h3>
+          <dl class="kv">
+            <dt>Deliverable</dt>
+            <dd>An event-driven backtest carrying commissions, spread, and a market-impact estimate. No-trade bands so that continuously resizing to hit an exact vol target doesn't churn away the benefit.</dd>
+            <dt>Why here</dt>
+            <dd>Nothing downstream can be evaluated without it, and most retail edges die entirely on costs. Building it before the strategy keeps the strategy honest.</dd>
+          </dl>
+          <div class="gate-line">
+            <b>Gate</b> One function produces both the backtest weights and the live weights,
+            enforced by a test asserting byte-identical output for a fixed date. If the paths
+            can drift, the backtest is fiction.
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-num">3<small>strategy</small></div>
+        <div class="phase-body">
+          <h3>Signal, sizing, and the risk layer</h3>
+          <dl class="kv">
+            <dt>Deliverable</dt>
+            <dd>12&ndash;2 momentum (formation t&minus;12 to t&minus;2, skipping the most recent month) &rarr; top-decile long-only selection &rarr; vol-targeted weights from a Ledoit&ndash;Wolf shrunk covariance &rarr; the hard risk layer.</dd>
+            <dt>Why shrinkage</dt>
+            <dd>Correlations spike in exactly the drawdowns you're sizing against. Naive inverse-vol weighting understates portfolio risk when it matters most; shrinkage is one scikit-learn call and it is the difference between a vol target that holds and one that blows through.</dd>
+          </dl>
+          <div class="gate-line">
+            <b>Gate</b> Net-of-cost Sharpe above ~0.4 across the full history, <i>and</i> vol targeting
+            must measurably improve risk-adjusted return over unscaled momentum. If scaling adds
+            nothing, the thesis is wrong and the sizing layer is decoration.
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-num">4<small>production</small></div>
+        <div class="phase-body">
+          <h3>Execution and reconciliation on paper</h3>
+          <dl class="kv">
+            <dt>Deliverable</dt>
+            <dd>A <code>Broker</code> interface &mdash; positions, account, submit, fills &mdash; with an Alpaca implementation behind it. Position reconciler, idempotent order state, scheduled unattended runs, monitoring and alerting.</dd>
+            <dt>Broker order</dt>
+            <dd>Alpaca first: REST, cloud-hostable, paper built in, keys already in <code>config.py:35</code>. IBKR later behind the same interface, when its product breadth is actually needed.</dd>
+            <dt>The real risk</dt>
+            <dd>Not signal decay &mdash; a crash halfway through a rebalance. Design for resumption from any point, every time.</dd>
+          </dl>
+          <div class="gate-line">
+            <b>Gate</b> Thirty consecutive unattended sessions with zero manual intervention and
+            positions reconciling exactly each day. Only then does live capital become a conversation.
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Phase 1 result</p>
+      <h2>The forecast beats the baselines, by a modest and steady margin.</h2>
+    </div>
+    <p class="prose">
+      Five expanding walk-forward folds with a five-day embargo, over 430,185 rows across
+      82 names and 5,344 trading days from 2005 to 2026. Every model scores the identical
+      out-of-sample rows. Lower is better on both metrics.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th><th>Parameters</th><th>QLIKE</th><th>RMSE</th>
+            <th>Fold wins, QLIKE</th><th>Fold wins, RMSE</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Random walk</td><td>none</td>
+            <td class="num">0.6366</td><td class="num">0.1642</td>
+            <td class="num">0 / 5</td><td class="num">0 / 5</td>
+          </tr>
+          <tr>
+            <td>EWMA</td><td>none &mdash; &lambda; fixed at 0.94</td>
+            <td class="num">0.5600</td><td class="num">0.1573</td>
+            <td class="num">0 / 5</td><td class="num">0 / 5</td>
+          </tr>
+          <tr>
+            <td>HAR-RV</td><td>3, refit each fold</td>
+            <td class="num">0.5757</td><td class="num">0.1506</td>
+            <td class="num">0 / 5</td><td class="num">1 / 5</td>
+          </tr>
+          <tr class="highlight">
+            <td>XGBoost</td><td>25 features, 400 trees</td>
+            <td class="num">0.5272</td><td class="num">0.1434</td>
+            <td class="num">5 / 5</td><td class="num">4 / 5</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>
+        The model wins QLIKE on every fold and RMSE on four of five, losing fold one
+        &mdash; the 2008&ndash;2012 block &mdash; to HAR by 0.0012, which is noise. Nothing
+        here depends on a single regime, which is the specific failure the gate was
+        written to catch.
+      </p>
+      <p>
+        Margins of 5&ndash;9% are worth having and are not a discovery. The honest reading:
+        volatility is genuinely forecastable, most of that forecastability is already in
+        EWMA and HAR, and the model adds a real but incremental slice on top. That is the
+        expected shape of a true result in a well-studied problem.
+      </p>
+    </div>
+
+    <div class="callout">
+      <h3>The bug that first read as a failed gate</h3>
+      <p>
+        The first run failed. XGBoost swept RMSE but lost QLIKE to EWMA on all five folds
+        &mdash; an odd pattern, since a model that forecasts better by one measure rarely
+        loses that consistently by another.
+      </p>
+      <p>
+        The cause was retransformation bias. Fitting <code>log(vol)</code> under squared-error
+        loss and exponentiating yields the conditional <i>median</i>, and volatility is
+        right-skewed, so the median sits below the mean. Measured directly: forecasts ran
+        9.1% low. QLIKE is deliberately asymmetric against under-forecasting, so it punished
+        that hard, while EWMA &mdash; which happened to over-forecast by 10% &mdash; was
+        rewarded for the same reason.
+      </p>
+      <p>
+        The fix is Duan's smearing estimator, <code>mean(exp(residual))</code> computed on
+        training residuals only, applied to both log-target models. It measured 1.099 against
+        an observed bias of 1/0.9085 = 1.101 &mdash; effectively exact. Correcting it also
+        lifted HAR substantially (QLIKE 0.690 to 0.576), making it a much stronger baseline
+        than the first run suggested. XGBoost still clears it.
+      </p>
+      <p>
+        Worth recording because the correction is now load-bearing in production: it is saved
+        inside the model artifact and applied by <code>predict_vol</code>. Loading the
+        estimator and calling it directly would quietly size every position about 9% light.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Gates</p>
+      <h2>Written down before the results exist.</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Measure</th><th>Threshold</th><th>If it fails</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr class="highlight">
+            <td class="num">1</td>
+            <td>Out-of-sample QLIKE &amp; MSE vs EWMA and HAR-RV</td>
+            <td class="num">must beat both</td>
+            <td>Ship the baseline, delete the model</td>
+            <td><span class="tag keep">Cleared</span></td>
+          </tr>
+          <tr>
+            <td class="num">2</td>
+            <td>Backtest and live weights from one code path</td>
+            <td class="num">byte-identical</td>
+            <td>Blocking &mdash; fix before proceeding</td>
+            <td><span class="tag retool">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td>Net-of-cost Sharpe, full history</td>
+            <td class="num">&gt; 0.4</td>
+            <td>Reconsider universe before reconsidering model</td>
+            <td><span class="tag retool">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td>Vol-targeted vs unscaled momentum</td>
+            <td class="num">must improve</td>
+            <td>Thesis is wrong &mdash; stop and reassess</td>
+            <td><span class="tag retool">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="num">4</td>
+            <td>Consecutive clean unattended sessions</td>
+            <td class="num">30</td>
+            <td>No live capital, no exceptions</td>
+            <td><span class="tag retool">Pending</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Inheritance</p>
+      <h2>What carries over from the ranking work.</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Disposition</th><th>Component</th><th>Note</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag keep">Keep</span></td>
+            <td class="path">config.py</td>
+            <td>Paths, periods, API keys. Add vol-target and risk-limit constants.</td>
+          </tr>
+          <tr>
+            <td><span class="tag keep">Keep</span></td>
+            <td class="path">parquet cache / fetch layer</td>
+            <td>Extend the window to ~20y; the caching pattern stands.</td>
+          </tr>
+          <tr>
+            <td><span class="tag keep">Keep</span></td>
+            <td class="path">technical.py:16,71</td>
+            <td><code>add_returns</code> and <code>add_atr</code> feed the vol estimator directly.</td>
+          </tr>
+          <tr>
+            <td><span class="tag retool">Retool</span></td>
+            <td class="path">train.py</td>
+            <td><code>_build_model</code> and <code>_walk_forward_folds</code> serve vol forecasting after a label swap.</td>
+          </tr>
+          <tr>
+            <td><span class="tag retool">Retool</span></td>
+            <td class="path">target.py</td>
+            <td>Add a forward realized-vol label; <code>future_return</code> stays as substrate.</td>
+          </tr>
+          <tr>
+            <td><span class="tag retool">Retool</span></td>
+            <td class="path">technical.py</td>
+            <td>Add close-to-close and range-based vol; High/Low/Open are already loaded, and range estimators are far more efficient.</td>
+          </tr>
+          <tr>
+            <td><span class="tag parked">Deleted</span></td>
+            <td class="path">api/main.py</td>
+            <td>Was a prediction endpoint for a retired model. Phase 4 builds a monitoring surface from scratch rather than reshaping this.</td>
+          </tr>
+          <tr>
+            <td><span class="tag parked">Deleted</span></td>
+            <td class="path">technical.py &mdash; MACD, SMA, RSI</td>
+            <td>Direction-prediction features that measured at noise level. Returns, range and volume remain, and now feed the vol forecast.</td>
+          </tr>
+          <tr>
+            <td><span class="tag parked">Park</span></td>
+            <td class="path">ranking path, predict.py, news/</td>
+            <td>Do not delete. A well-tested negative result is worth keeping.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Decisions</p>
+      <h2>Calls made, with the reasoning attached.</h2>
+    </div>
+    <div class="decisions">
+      <div class="decision">
+        <h3>12&ndash;2 and 12&ndash;1 are the same thing</h3>
+        <p>
+          The standard factor forms on returns from t&minus;12 to t&minus;2. Some call it 12&ndash;1
+          for the skipped month, some 12&ndash;2 for where the window ends. Whatever it's called,
+          the skip is load-bearing &mdash; it dodges short-term reversal.
+        </p>
+      </div>
+      <div class="decision">
+        <h3>Long-only for v1</h3>
+        <p>
+          Most of momentum's crash risk lives in the short leg, and going long-only sheds borrow,
+          locates, and squeezes at the same time. Shorting is a later decision, made with live
+          data rather than backtested optimism.
+        </p>
+      </div>
+      <div class="decision">
+        <h3>Alpaca before IBKR</h3>
+        <p>
+          IBKR is the better long-run venue, but it wants a running gateway, a socket API, and a
+          daily re-auth cycle. Gateway plumbing should not block the first working loop. The
+          interface makes the switch cheap later.
+        </p>
+      </div>
+      <div class="decision">
+        <h3>No LLM in the money path</h3>
+        <p>
+          Deterministic checks own the alerts and the kill switch. The model may triage an anomaly,
+          summarize the overnight session, and draft the daily note. It never sizes, sends, or
+          cancels. That boundary lives in the code, not in intent.
+        </p>
+      </div>
+      <div class="decision">
+        <h3>Paper trading is the only real evidence</h3>
+        <p>
+          Every backtest is self-graded, and this one is survivorship-biased on top. The forward
+          paper record is the first genuinely out-of-sample sample this project will ever have.
+        </p>
+      </div>
+      <div class="decision">
+        <h3>Expectations, set honestly</h3>
+        <p>
+          Momentum has decayed in US mega-caps. Raw long/short Sharpe of roughly 0.3&ndash;0.5,
+          better after scaling. Real, useful, and not spectacular &mdash; which is the point.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Carried forward</p>
+      <h2>The result this plan is built on top of.</h2>
+    </div>
+    <details>
+      <summary>Cross-sectional ranking &mdash; tested, no-go (2026-07-27)</summary>
+      <div class="details-body">
+        <p>
+          A pooled XGBoost ranker on cross-sectionally demeaned 5-day forward returns, over 71 names
+          and roughly two years of daily bars. The pre-committed gate was mean rank IC above 0.03,
+          stable across folds, with a long/short Sharpe above 1.
+        </p>
+        <dl class="ic-list">
+          <dt>5d &mdash; ranked binary classifier probability</dt><dd>+0.0037</dd>
+          <dt>5d &mdash; regressor on demeaned return</dt><dd>&minus;0.0003</dd>
+          <dt>21d &mdash; regressor, monthly horizon</dt><dd>&minus;0.0185</dd>
+          <dt>5d &mdash; regressor with news features</dt><dd>&minus;0.0005</dd>
+        </dl>
+        <p>
+          Folds disagreed in sign and cancelled. No individual feature cleared the gate; the best,
+          <code>atr_pct</code>, reached IC 0.0255 at an information ratio of 0.09. A synthetic
+          control with a planted signal recovered IC ~0.49, confirming the harness detects signal
+          when signal exists.
+        </p>
+        <p>
+          Two conclusions carry into this branch. First, the harness and the pre-commitment
+          discipline are sound and are being reused. Second, the information set was the problem:
+          standard indicators on the most heavily arbitraged names in the world. This roadmap
+          responds by changing the question rather than retuning the answer.
+        </p>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    Living document on branch feat/vol-targeted-momentum. Gates are pre-committed &mdash;
+    amend them only before a result is known, never after.
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var canvas = document.getElementById("cone");
+    if (!canvas || !canvas.getContext) return;
+    var ctx = canvas.getContext("2d");
+
+    function readVar(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    function hexToRgb(hex) {
+      var h = hex.replace("#", "");
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var n = parseInt(h, 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+
+    function rgba(hex, a) {
+      var c = hexToRgb(hex);
+      return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")";
+    }
+
+    function draw() {
+      var dpr = window.devicePixelRatio || 1;
+      var cssW = canvas.clientWidth || 1040;
+      var cssH = canvas.clientHeight || 132;
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      var accent = readVar("--accent") || "#0F6E78";
+      var faint = readVar("--ink-faint") || "#7C8697";
+      var rule = readVar("--rule") || "#DCE1E9";
+
+      var mid = cssH / 2;
+      var x0 = 4;
+      var x1 = cssW - 4;
+      var span = x1 - x0;
+      var maxSpread = cssH * 0.42;
+
+      // baseline
+      ctx.strokeStyle = rgba(rule, 1);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x0, mid);
+      ctx.lineTo(x1, mid);
+      ctx.stroke();
+
+      // unscaled fan: spread grows with the square root of horizon
+      var bands = 4;
+      for (var b = bands; b >= 1; b--) {
+        var frac = b / bands;
+        ctx.beginPath();
+        for (var i = 0; i <= 120; i++) {
+          var t = i / 120;
+          var x = x0 + t * span;
+          var s = maxSpread * frac * Math.sqrt(t);
+          ctx.lineTo(x, mid - s);
+        }
+        for (var j = 120; j >= 0; j--) {
+          var t2 = j / 120;
+          var x2 = x0 + t2 * span;
+          var s2 = maxSpread * frac * Math.sqrt(t2);
+          ctx.lineTo(x2, mid + s2);
+        }
+        ctx.closePath();
+        ctx.fillStyle = rgba(faint, 0.07);
+        ctx.fill();
+      }
+
+      // unscaled outer edge
+      ctx.strokeStyle = rgba(faint, 0.5);
+      ctx.lineWidth = 1;
+      [-1, 1].forEach(function (sign) {
+        ctx.beginPath();
+        for (var i = 0; i <= 120; i++) {
+          var t = i / 120;
+          ctx.lineTo(x0 + t * span, mid + sign * maxSpread * Math.sqrt(t));
+        }
+        ctx.stroke();
+      });
+
+      // vol-targeted band: constant width once the target engages
+      var target = maxSpread * 0.34;
+      ctx.beginPath();
+      for (var i = 0; i <= 120; i++) {
+        var t = i / 120;
+        var ramp = Math.min(1, t / 0.12);
+        ctx.lineTo(x0 + t * span, mid - target * ramp);
+      }
+      for (var j = 120; j >= 0; j--) {
+        var t2 = j / 120;
+        var ramp2 = Math.min(1, t2 / 0.12);
+        ctx.lineTo(x0 + t2 * span, mid + target * ramp2);
+      }
+      ctx.closePath();
+      ctx.fillStyle = rgba(accent, 0.13);
+      ctx.fill();
+
+      ctx.strokeStyle = rgba(accent, 0.9);
+      ctx.lineWidth = 1.5;
+      [-1, 1].forEach(function (sign) {
+        ctx.beginPath();
+        for (var i = 0; i <= 120; i++) {
+          var t = i / 120;
+          var ramp = Math.min(1, t / 0.12);
+          ctx.lineTo(x0 + t * span, mid + sign * target * ramp);
+        }
+        ctx.stroke();
+      });
+    }
+
+    draw();
+
+    var pending;
+    window.addEventListener("resize", function () {
+      clearTimeout(pending);
+      pending = setTimeout(draw, 120);
+    });
+
+    if (window.matchMedia) {
+      var mq = window.matchMedia("(prefers-color-scheme: dark)");
+      if (mq.addEventListener) mq.addEventListener("change", draw);
+      else if (mq.addListener) mq.addListener(draw);
+    }
+
+    new MutationObserver(draw).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"]
+    });
+  })();
+</script>

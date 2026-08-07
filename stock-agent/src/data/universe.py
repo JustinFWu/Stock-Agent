@@ -1,10 +1,16 @@
 """
-Stock universe definitions: benchmark, sector ETF mappings.
+Stock universe definitions: benchmark, sector membership.
+
+Survivorship warning: these are today's large caps. Names that fell out of the index
+over the last twenty years are absent, so any backtest run over this universe is
+biased upward. That is tolerable for checking that the machinery works and for live
+trading, where you can only trade what exists — it is not evidence a strategy is good.
 """
 
 BENCHMARK = "SPY"
 
-# Map individual tickers to their sector ETF for relative strength comparison.
+# Sector membership, via each name's sector ETF. Defines the universe, and gives the
+# risk layer the grouping it needs for per-sector exposure limits.
 SECTOR_MAP = {
     # Technology
     "AAPL": "XLK", "MSFT": "XLK", "NVDA": "XLK", "GOOG": "XLK", "GOOGL": "XLK",
@@ -36,3 +42,5 @@ SECTOR_MAP = {
     # Materials
     "LIN": "XLB", "APD": "XLB", "SHW": "XLB", "FCX": "XLB",
 }
+
+ALL_TICKERS = sorted(SECTOR_MAP)

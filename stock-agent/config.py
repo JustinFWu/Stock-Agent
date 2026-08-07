@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -9,30 +10,27 @@ FEATURES_DIR = DATA_DIR / "features"
 MODELS_DIR = ROOT / "models" / "saved"
 
 # Data settings
-DEFAULT_PERIOD = "2y"
+# An explicit start date rather than a yfinance `period`: 12-2 momentum burns twelve
+# months on formation, so a short window leaves almost nothing to test on. yfinance
+# only accepts a fixed set of period strings (no "20y"), and a fixed date also makes
+# every rebuild reproducible instead of sliding with today's date.
+HISTORY_START = "2005-01-01"
 DEFAULT_INTERVAL = "1d"
 
+TRADING_DAYS = 252
+
 # Feature settings
-RSI_PERIOD = 14
 ATR_PERIOD = 14
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-MA_PERIODS = [10, 20, 50]
-RETURN_HORIZONS = [1, 5, 10, 20]
+RETURN_HORIZONS = [1, 5, 10, 21, 63, 126, 252]
+
+# Realized-volatility windows (trading days). The first three are the HAR-RV
+# daily/weekly/monthly cascade; 63 gives a slower regime reference.
+RV_WINDOWS = [1, 5, 21, 63]
+EWMA_LAMBDA = 0.94  # RiskMetrics decay for the EWMA variance baseline
 
 # Label settings
-FORWARD_DAYS = 5  # predict 1 week ahead
-
-# Model settings
-CONFIDENCE_THRESHOLD = 0.65  # no-trade zone below this
-
-# News settings
-MAX_ARTICLES_PER_DAY = 5  # cap per trading day to bound LLM scoring cost; set None for uncapped
+FORWARD_DAYS = 5  # forecast horizon: next week's realized volatility
 
 # API keys (set via environment variables)
-import os
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-TIINGO_API_KEY = os.getenv("TIINGO_API_KEY", "")

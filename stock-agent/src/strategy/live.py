@@ -1,23 +1,3 @@
-"""
-The live side of the Phase 2 gate.
-
-This is what a scheduled production run will call to answer "what should the
-portfolio look like after today's close". It is deliberately thin: load the
-panel, delegate to `target_weights`, return. Every decision of consequence —
-which names are eligible, the history requirement, the per-name cap, the gross
-ceiling, the rounding — happens inside the shared function, so there is nothing
-here that could diverge from the backtest.
-
-Thinness is the feature. The moment this file grows a rule of its own, the
-backtest stops describing what production does, and `tests/test_weight_parity.py`
-is there to fail loudly when that happens.
-
-Order generation and submission are not here. Phase 4 adds a broker interface
-that takes these weights and reconciles them against actual positions; the point
-of stopping at weights is that the same target can be produced, logged and
-compared long before anything can send an order.
-"""
-
 import sys
 from pathlib import Path
 
@@ -29,6 +9,13 @@ from config import (MAX_GROSS, MAX_LIVE_STALENESS_DAYS, MAX_WEIGHT,
 from src.data.panel import PricePanel, load_price_panel
 from src.data.universe import UNIVERSE, UniverseSpec
 from src.strategy.weights import Strategy, target_weights
+
+# Thinness is the feature. Every decision of consequence — eligibility, history, the caps,
+# the rounding — happens inside `target_weights`, so nothing here can diverge from the
+# backtest. tests/test_weight_parity.py fails loudly the moment this grows a rule of its own.
+
+# Order generation and submission are Phase 4. Stopping at weights means the same target can
+# be produced, logged and compared long before anything can send an order.
 
 
 def live_target_weights(
@@ -44,39 +31,16 @@ def live_target_weights(
     min_coverage: float = MIN_LIVE_COVERAGE,
     today=None,
 ) -> pd.Series:
-    """
-    Target weights for a live run, from the cached bar panel.
+    # `as_of` defaults to the panel's last date — in production, the session that just
+    # closed. An explicit date is what makes the parity test possible, and is how a missed
+    # session gets re-run for the day it should have traded rather than for today.
 
-    `as_of` defaults to the last date in the panel, which in production is the
-    session that just closed. Passing an explicit date is what makes the parity
-    test possible, and is also how a missed session gets re-run for the day it
-    was supposed to trade rather than for today.
+    # That default is the dangerous one, so it is the only guarded path: nothing else checks
+    # freshness (`is_current` asks about the fetch *window*), so an old cache would produce
+    # confident live weights forever. An explicit `as_of` is a deliberate replay and skips both.
 
-    That default is also the dangerous one, so it is the only path that is guarded.
-    Calling with no `as_of` means "trade on the latest data", and nothing else in
-    the system checks whether the latest data is actually recent — `is_current`
-    answers a question about the fetch *window*, not about freshness, and a routine
-    `--fetch` skips a ticker whose window still matches however old its last bar is.
-    Left unchecked, a cache from months ago produces confident live weights forever.
-    Two things are therefore required before an unspecified `as_of` is accepted:
-
-      staleness  the panel's last session must be within `max_staleness_days`.
-      coverage   that session must carry bars for at least `min_coverage` of the
-                 universe. One updated ticker is enough to advance the panel's last
-                 date while every stale name silently drops out of the candidates,
-                 which produces a well-formed, fully-invested portfolio of whichever
-                 handful of names happened to refresh.
-
-    An explicit `as_of` skips both checks. Naming a session is a deliberate replay
-    of history, and refusing to replay 2024 because it is not today would be absurd.
-
-    `panel` is injectable so a caller — the parity test, or a dry run against a
-    frozen snapshot — can supply data without touching the cache on disk. The
-    `universe` default is the same object the backtest runs on; overriding it here
-    and not there is precisely the divergence the parity test exists to catch.
-    `today` is injectable for the same reason: a freshness rule that cannot be
-    tested without waiting for tomorrow is a freshness rule nobody tests.
-    """
+    # `panel` and `today` are injectable so the guards can be tested without touching the
+    # cache or waiting for tomorrow.
     if panel is None:
         panel = load_price_panel(list(universe.tickers))
 
@@ -97,7 +61,6 @@ def live_target_weights(
 
 def _check_live_data(panel: PricePanel, as_of, universe: UniverseSpec, min_history: int,
                      max_staleness_days: int, min_coverage: float, today) -> None:
-    """Refuse to trade on data that is old, or on a session most names are missing from."""
     today = pd.Timestamp(today).normalize() if today is not None else pd.Timestamp.today().normalize()
     age_days = (today - as_of.normalize()).days
     if age_days > max_staleness_days:
@@ -107,6 +70,9 @@ def _check_live_data(panel: PricePanel, as_of, universe: UniverseSpec, min_histo
             "cache — run `pipeline.py --fetch --refetch`. Pass an explicit as_of to "
             "replay a historical session deliberately.")
 
+    # One updated ticker is enough to advance the panel's last date while every stale name
+    # drops silently out of the candidates, producing a well-formed, fully-invested
+    # portfolio of whichever handful of names happened to refresh.
     covered = len(panel.as_of(as_of).tradable_as_of(as_of, min_history=min_history))
     expected = len(universe.members_asof(as_of))
     if expected and covered < min_coverage * expected:

@@ -1,10 +1,5 @@
-"""
-The look-ahead firewall.
-
-Every other guarantee in the backtest rests on `as_of` truncation being airtight,
-so these tests are blunt about it: after truncation the future bars must not
-merely be ignored, they must be absent.
-"""
+# Every other guarantee in the backtest rests on `as_of` truncation being airtight, so these are
+# blunt about it: after truncation the future bars must not merely be ignored, they must be absent.
 
 import dataclasses
 import sys
@@ -43,7 +38,7 @@ def test_tradable_requires_a_bar_on_the_day(late_lister_panel):
 
 
 def test_min_history_excludes_a_thin_track_record(late_lister_panel):
-    """A name with 50 bars must not be ranked against one with 350."""
+    # A name with 50 bars must not be ranked against one with 350.
     date = late_lister_panel.dates[349]  # NEW has 50 bars here, OLD has 350
     assert late_lister_panel.tradable_as_of(date, min_history=100) == ["OLD"]
     assert late_lister_panel.tradable_as_of(date, min_history=10) == ["NEW", "OLD"]
@@ -54,12 +49,8 @@ def test_non_trading_day_is_tradable_by_nobody(flat_panel):
 
 
 def test_universe_membership_is_a_no_op_but_honest():
-    """
-    The membership seam returns everything, and says so via `point_in_time`.
-
-    The flag is what a report branches on. If it ever reads True while
-    `members_asof` still returns the full list, the disclosure has become a lie.
-    """
+    # The flag is what a report branches on. If it ever reads True while `members_asof` still
+    # returns the full list, the disclosure has become a lie.
     assert UNIVERSE.point_in_time is False
     assert UNIVERSE.members_asof("2008-01-02") == list(UNIVERSE.tickers)
     assert UNIVERSE.members_asof("2026-01-02") == list(UNIVERSE.tickers)
@@ -67,12 +58,7 @@ def test_universe_membership_is_a_no_op_but_honest():
 
 
 def test_universe_spec_is_immutable():
-    """
-    Frozen for a reason: the caveats travel on this object into every result.
-
-    Named exactly rather than caught as a bare `Exception` — a blind assert here
-    would also pass if the attribute name were misspelled and raised AttributeError,
-    which is the opposite of what this checks.
-    """
+    # Named exactly rather than caught as a bare Exception: a blind assert would also pass if the
+    # attribute name were misspelled and raised AttributeError, the opposite of what this checks.
     with pytest.raises(dataclasses.FrozenInstanceError):
         UNIVERSE.point_in_time = True

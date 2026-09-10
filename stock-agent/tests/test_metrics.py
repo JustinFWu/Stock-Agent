@@ -1,9 +1,5 @@
-"""
-Metrics, including the relative block the Phase 3 gate is meant to read.
-
-The relative statistics matter more than the absolute ones here, because the
-absolute ones are the numbers that a survivorship-biased universe inflates.
-"""
+# The relative statistics matter more than the absolute ones here, because the absolute ones are
+# what a survivorship-biased universe inflates.
 
 import sys
 from pathlib import Path
@@ -23,7 +19,7 @@ def curve(daily_return: float, days: int = TRADING_DAYS * 4) -> pd.Series:
 
 
 def test_summarize_recovers_a_known_cagr():
-    """A curve compounding at a fixed rate has a CAGR that can be computed by hand."""
+    # A curve compounding at a fixed rate has a CAGR that can be computed by hand.
     equity = curve(0.0004)
     zeros = pd.Series(0.0, index=equity.index)
     metrics = summarize(equity, zeros, zeros)
@@ -51,14 +47,9 @@ def test_cost_drag_is_annualised_against_each_days_nav():
 
 
 def test_turnover_is_measured_against_the_nav_of_the_day():
-    """
-    Turnover accumulates day by day, not against the average NAV over the run.
-
-    On a curve that grows, dividing early trading by a mean NAV several times its
-    actual size understates turnover — and understates it in the flattering
-    direction. Here the same fraction of NAV is traded on each of two days at very
-    different NAV levels, so a correct measure returns exactly 2 x that fraction.
-    """
+    # On a growing curve, dividing early trading by a mean NAV several times its actual size
+    # understates turnover in the flattering direction. The same fraction of NAV is traded on two
+    # days at very different NAV levels, so a correct measure returns exactly 2x that fraction.
     equity = pd.Series([100.0, 100.0, 1000.0, 1000.0],
                        index=pd.bdate_range("2020-01-01", periods=4))
     traded = pd.Series([10.0, 0.0, 100.0, 0.0], index=equity.index)  # 10% of NAV, twice
@@ -70,14 +61,9 @@ def test_turnover_is_measured_against_the_nav_of_the_day():
 
 
 def test_identical_curves_have_no_information_ratio():
-    """
-    A strategy that is its own baseline adds nothing, and must report nothing.
-
-    This is exactly the Phase 2 situation — the placeholder strategy is the
-    baseline — so the degenerate case has to produce clean output rather than a
-    division by float noise. A volatile curve is used so the individual Sharpes
-    are real numbers and only the *active* statistics collapse.
-    """
+    # Exactly the Phase 2 situation — the placeholder strategy is the baseline — so the degenerate
+    # case must produce clean output rather than a division by float noise. A volatile curve keeps
+    # the individual Sharpes real so only the *active* statistics collapse.
     rng = np.random.default_rng(7)
     dates = pd.bdate_range("2020-01-01", periods=TRADING_DAYS * 2)
     equity = pd.Series(100 * np.cumprod(1 + rng.normal(0.0004, 0.01, len(dates))),
@@ -91,13 +77,8 @@ def test_identical_curves_have_no_information_ratio():
 
 
 def test_summarize_relative_cancels_a_shared_component():
-    """
-    The point of the whole exercise: a common inflation must not show up as skill.
-
-    Strategy and baseline here share an identical drift and differ only by noise
-    with zero mean. Excess CAGR should be near zero even though both curves have
-    a large absolute return.
-    """
+    # Strategy and baseline share an identical drift and differ only by zero-mean noise, so excess
+    # CAGR should be near zero even though both curves have a large absolute return.
     rng = np.random.default_rng(0)
     dates = pd.bdate_range("2020-01-01", periods=TRADING_DAYS * 5)
     common = 0.0006 + rng.normal(0, 0.01, len(dates))

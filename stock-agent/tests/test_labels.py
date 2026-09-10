@@ -1,13 +1,6 @@
-"""
-Forward labels — where a leak would be fatal and invisible.
-
-A label that reaches one bar too far back is not a small error. It hands the model
-a piece of the present dressed as the future, and the validation score that results
-looks like skill. These tests pin the window at both ends: the label must move when
-a bar inside it moves, and must not move when a bar outside it moves.
-
-`label_end` gets its own coverage because the walk-forward purge is built on it.
-"""
+# A label reaching one bar too far back hands the model a piece of the present dressed as the
+# future, and the resulting score looks like skill. These pin the window at both ends. `label_end`
+# gets its own coverage because the walk-forward purge is built on it.
 
 import sys
 from pathlib import Path
@@ -25,7 +18,7 @@ HORIZON = 5
 
 
 def test_forward_vol_is_the_annualised_vol_of_the_next_h_returns():
-    """Computed by hand from the bars the window covers, not from the implementation."""
+    # Computed by hand from the bars the window covers, not from the implementation.
     bars = make_bars(periods=60, seed=21)
     labelled = add_forward_vol(bars, horizon=HORIZON)
 
@@ -38,7 +31,7 @@ def test_forward_vol_is_the_annualised_vol_of_the_next_h_returns():
 
 
 def test_the_label_moves_with_a_bar_inside_its_window():
-    """A window that ignores its own contents is not measuring the future."""
+    # A window that ignores its own contents is not measuring the future.
     bars = make_bars(periods=40, seed=22)
     t = 10
 
@@ -51,13 +44,9 @@ def test_the_label_moves_with_a_bar_inside_its_window():
 
 
 def test_the_label_ignores_bars_past_the_end_of_its_window():
-    """
-    The other end of the same rule, and the one a leak actually shows up at.
-
-    A window that quietly extends past t+h is reading further into the future than
-    the horizon it advertises, and the saved model's `horizon` field would then be
-    a description of something the model was never trained on.
-    """
+    # A window that quietly extends past t+h reads further into the future than it advertises, and
+    # the saved model's `horizon` field would then describe something the model was never trained
+    # on.
     bars = make_bars(periods=40, seed=23)
     t = 10
 
@@ -70,7 +59,7 @@ def test_the_label_ignores_bars_past_the_end_of_its_window():
 
 
 def test_label_end_names_the_bar_the_window_closes_on():
-    """The purge in the walk-forward split is only as correct as this column."""
+    # The purge in the walk-forward split is only as correct as this column.
     bars = make_bars(periods=40, seed=24)
     labelled = add_forward_vol(bars, horizon=HORIZON)
 
@@ -79,13 +68,9 @@ def test_label_end_names_the_bar_the_window_closes_on():
 
 
 def test_label_end_follows_observed_bars_not_the_calendar():
-    """
-    The whole point of carrying the column: for a ticker with missing sessions, the
-    horizon-th *observed* bar is much later than the horizon-th calendar date.
-
-    This is the case a date-counted embargo gets wrong, and the reason the purge
-    asks the row instead of counting.
-    """
+    # For a ticker with missing sessions the horizon-th *observed* bar is much later than the
+    # horizon-th calendar date. That is the case a date-counted embargo gets wrong, and the reason
+    # the purge asks the row instead of counting.
     calendar = pd.bdate_range("2021-01-04", periods=20)
     observed = calendar[[0, 1, 2, 3, 4] + list(range(10, 20))]
 
@@ -107,12 +92,8 @@ def test_the_last_rows_have_no_label():
 
 
 def test_a_flat_window_produces_no_label_rather_than_zero():
-    """
-    A halted or gap-filled week reads as zero volatility, which is not an observation.
-
-    Zero is also fatal downstream: the models train on log(forward_vol), and log(0)
-    is negative infinity. NaN drops the row; zero poisons the fit.
-    """
+    # Zero is fatal downstream: the models train on log(forward_vol), and log(0) is negative
+    # infinity. NaN drops the row; zero poisons the fit.
     bars = make_bars(periods=30, seed=27)
     t = 10
     bars.iloc[t:t + HORIZON + 1, bars.columns.get_loc("Close")] = 100.0

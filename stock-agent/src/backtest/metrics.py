@@ -1,20 +1,3 @@
-"""
-Performance statistics for an equity curve.
-
-Kept separate from the engine so the same numbers can be computed for a live
-track record later without a backtest anywhere in the call stack — the Phase 4
-monitoring surface reports against the same definitions the gates were written
-in, which is only true if there is one definition of each.
-
-Two things reported here that a naive summary leaves out, both because they are
-where a plausible-looking strategy usually fails:
-
-  turnover    Annualised two-way turnover. A Sharpe that needs 900% turnover a
-              year is a Sharpe made of cost assumptions.
-  cost drag   Realised costs as an annualised fraction of average NAV, so the
-              gross-to-net gap is a stated number rather than an inference.
-"""
-
 import sys
 from pathlib import Path
 
@@ -24,34 +7,32 @@ import pandas as pd
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import TRADING_DAYS
 
-# Below this daily standard deviation a return series is flat, and the float noise
-# left in it is not risk. Testing `std > 0` is not enough: a portfolio sitting in
-# cash at a fixed rate has a std around 1e-18, which divides into a Sharpe of
-# 5e13. Volatility targeting will put the portfolio entirely in cash sooner or
-# later, so this is a case the reporting has to survive rather than an edge case.
+# Separate from the engine so a live track record can be scored without a backtest in the
+# call stack: the Phase 4 monitoring surface must report against the definitions the gates
+# were written in, which only holds if there is one definition of each.
+
+# Turnover and cost drag are reported because they are where a plausible-looking strategy
+# fails. A Sharpe that needs 900% turnover a year is a Sharpe made of cost assumptions.
+
+# `std > 0` is not enough: a portfolio sitting in cash at a fixed rate has a std near
+# 1e-18, which divides into a Sharpe of 5e13. Vol targeting will go entirely to cash
+# sooner or later, so the reporting has to survive it rather than treat it as an edge case.
 FLAT_RETURN_TOLERANCE = 1e-12
 
 
 def summarize(equity: pd.Series, costs_paid: pd.Series, traded_notional: pd.Series,
               risk_free_rate: float = 0.0) -> dict:
-    """
-    Headline statistics for a daily NAV series.
-
-    `costs_paid` and `traded_notional` are daily dollar totals aligned to the same
-    index. Sharpe is computed on daily simple returns, in excess of a constant
-    risk-free rate, and annualised by sqrt(252) — the usual convention, and one
-    that overstates the ratio when returns are autocorrelated or fat-tailed.
-    Treat a Sharpe near a gate threshold as inconclusive, not as a pass.
-    """
+    # sqrt(252) annualisation is the usual convention and overstates the ratio when returns
+    # are autocorrelated or fat-tailed. Treat a Sharpe near a gate threshold as
+    # inconclusive, not as a pass.
     equity = equity.dropna()
     if len(equity) < 2:
         raise ValueError("Need at least two NAV observations to summarize.")
 
     returns = equity.pct_change().dropna()
-    # N daily marks span N-1 periods of growth, not N. Counting the marks instead
-    # of the periods stretches the elapsed time by a day and quietly shaves the
-    # CAGR, the turnover and the cost drag — small, but wrong in the direction
-    # that flatters, and it compounds into every gate this feeds.
+    # N daily marks span N-1 periods of growth. Counting marks stretches elapsed time by a
+    # day and shaves CAGR, turnover and cost drag — small, but wrong in the flattering
+    # direction, and it compounds into every gate this feeds.
     years = len(returns) / TRADING_DAYS
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
 
@@ -65,12 +46,9 @@ def summarize(equity: pd.Series, costs_paid: pd.Series, traded_notional: pd.Seri
     max_dd = float(drawdown.min())
     cagr = float((equity.iloc[-1] / equity.iloc[0]) ** (1 / years) - 1.0) if years > 0 else np.nan
 
-    # Both ratios are accumulated day by day against that day's NAV, not against
-    # the average NAV over the whole run. On a curve that compounds 18x, dividing
-    # early trading by a mean NAV several times its actual size understates
-    # turnover and cost drag by nearly 20% — and understates them in the
-    # flattering direction, in the two statistics that exist precisely because
-    # they are where a plausible-looking strategy fails.
+    # Accumulated against each day's NAV, not the run's average. On a curve compounding
+    # 18x, dividing early trading by a mean NAV several times its actual size understates
+    # turnover and cost drag by nearly 20%, in the flattering direction.
     total_costs = float(costs_paid.sum())
     total_traded = float(traded_notional.sum())
     turnover_ratio = _sum_over_nav(traded_notional, equity)
@@ -97,35 +75,22 @@ def summarize(equity: pd.Series, costs_paid: pd.Series, traded_notional: pd.Seri
 
 
 def _sum_over_nav(flows: pd.Series, equity: pd.Series) -> float:
-    """Sum each day's dollar flow as a fraction of that day's NAV."""
     aligned = pd.concat([flows.rename("flow"), equity.rename("nav")], axis=1).dropna()
     aligned = aligned[aligned["nav"] > 0]
     return float((aligned["flow"] / aligned["nav"]).sum())
 
 
 def summarize_relative(strategy_equity: pd.Series, baseline_equity: pd.Series) -> dict:
-    """
-    Statistics of the strategy's returns minus a baseline run on the same universe.
+    # The absolute Sharpe of anything on a survivorship-biased universe is uninterpretable:
+    # equal-weight over these 82 names scores ~0.91 with no signal in it.
 
-    This exists because the absolute Sharpe of anything run on a survivorship-
-    biased universe is uninterpretable: an equal-weight, daily-rebalanced run over
-    this project's 82 names scores about 0.91 with no signal in it at all. Measuring
-    against a baseline drawn from the same names removes the part of that which both
-    portfolios hold in common, which is what makes the information ratio below the
-    most informative figure here.
+    # Not a correction. Differencing removes a *shared* component, and survivorship is not
+    # shared additively — the missing failed names would have changed each portfolio's
+    # selection differently. This is active performance on a survivor-selected universe.
 
-    It is not a correction, and the difference matters. Subtracting daily returns
-    removes a *shared* component; survivorship bias is not shared additively, because
-    strategy and baseline hold the same names at different weights and the missing
-    failed names would have changed each one's selection differently. What this
-    reports is active performance measured on a survivor-selected universe. The
-    selection problem is still there afterwards, and only point-in-time data removes
-    it — see `universe.py`.
-
-    Both series are reported alongside the difference rather than collapsed into
-    one adjusted number. A haircut destroys the audit trail — once one figure has
-    been adjusted, a reader cannot tell which of the others are measurements.
-    """
+    # Both series are reported alongside the difference rather than collapsed into one
+    # adjusted number: once a figure has been haircut, a reader cannot tell which of the
+    # others are measurements.
     aligned = pd.concat([strategy_equity.rename("strategy"),
                          baseline_equity.rename("baseline")], axis=1).dropna()
     if len(aligned) < 2:
@@ -162,7 +127,7 @@ def summarize_relative(strategy_equity: pd.Series, baseline_equity: pd.Series) -
 
 
 def format_relative_summary(relative: dict, baseline_name: str) -> str:
-    """The relative block, with the information ratio last because it is the conclusion."""
+    # Information ratio last because it is the conclusion.
     return "\n".join([
         f"  vs baseline     {baseline_name}",
         f"  Sharpe          {relative['sharpe_strategy']:>8.2f}  strategy",
@@ -178,7 +143,6 @@ def format_relative_summary(relative: dict, baseline_name: str) -> str:
 
 
 def format_summary(metrics: dict) -> str:
-    """Human-readable block, in the order a reader actually wants to check it."""
     lines = [
         f"  period          {metrics['start']} -> {metrics['end']}  ({metrics['years']:.1f}y)",
         f"  total return    {metrics['total_return']:>8.1%}",

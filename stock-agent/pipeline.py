@@ -33,13 +33,9 @@ from src.strategy.weights import EqualWeightStrategy
 
 
 def do_fetch(refetch: bool) -> list[str]:
-    """
-    Pull bars for the whole universe plus the benchmark, skipping what is current.
-
-    Returns the tickers that failed so the caller can set an exit status. Printing
-    the failures and exiting 0 makes a fetch that downloaded nothing indistinguishable
-    from a successful one to anything automated — a scheduler, a Makefile, CI.
-    """
+    # Returns the failures so the caller can set an exit status. Printing them and exiting
+    # 0 makes a fetch that downloaded nothing indistinguishable from a successful one to
+    # anything automated — a scheduler, a Makefile, CI.
     tickers = list(UNIVERSE.tickers) + [BENCHMARK]
     print(f"Fetching {len(tickers)} tickers...")
 
@@ -82,21 +78,13 @@ COST_MODELS = {"alpaca": ALPACA_COSTS, "pessimistic": PESSIMISTIC_COSTS, "zero":
 
 
 def do_backtest(rebalance: str, cost_model: str, band: float, start: str | None) -> None:
-    """
-    Run the Phase 2 backtester over cached bars.
+    # The baseline run is not optional, and that is the point: on a survivorship-biased
+    # universe an absolute Sharpe means nothing, so the runner always computes the
+    # same-universe baseline. Enforcement by construction beats enforcement by discipline.
 
-    The baseline run is not optional, and that is the point. On a survivorship-
-    biased universe an absolute Sharpe means nothing — an equal-weight daily-
-    rebalanced run over these names scores about 0.91 with no signal in it — so
-    the runner always
-    computes the same-universe baseline and prints the difference. Enforcement by
-    construction beats enforcement by discipline.
-
-    Phase 2 has no strategy yet, so the strategy IS the baseline and the relative
-    block is trivially zero. That is the correct output for a session whose
-    deliverable is the machinery, and it makes the comparison visible from the day
-    Phase 3's signal is dropped in.
-    """
+    # Phase 2 has no strategy yet, so the strategy IS the baseline and the relative block is
+    # trivially zero — correct for a session whose deliverable is the machinery, and it makes
+    # the comparison visible from the day Phase 3's signal is dropped in.
     strategy = EqualWeightStrategy()
     baseline = EqualWeightStrategy()
 

@@ -1,16 +1,6 @@
-"""
-The volatility model stack — the Phase 1 gate's machinery.
-
-This is the layer whose bugs are hardest to see, because every one of them still
-produces a number. A leaked label produces a good score. A dropped smearing factor
-produces a forecast that is merely low. A silently narrowed feature set produces a
-different model wearing the same name. None of it raises.
-
-The walk-forward purge gets the most attention here. It is the property the whole
-gate rests on: if a training row's outcome is measured inside the block it is about
-to be scored on, the comparison against EWMA and HAR is meaningless, and the "PASS"
-that comes out of it is a measurement of the leak.
-"""
+# The layer whose bugs are hardest to see, because every one still produces a number: a leaked
+# label scores well, a dropped smearing factor merely reads low, a narrowed feature set is a
+# different model wearing the same name. The walk-forward purge gets the most attention.
 
 import sys
 from pathlib import Path
@@ -35,7 +25,7 @@ HORIZON = 5
 
 
 def build_pooled(tickers=("AAA", "BBB"), periods: int = 420, seed: int = 40) -> pd.DataFrame:
-    """A pooled feature+label frame built through the real pipeline, not a mock of it."""
+    # A pooled feature+label frame built through the real pipeline, not a mock of it.
     frames = []
     for offset, ticker in enumerate(tickers):
         df = make_bars(periods=periods, seed=seed + offset)
@@ -57,13 +47,8 @@ def pooled() -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 
 def test_prepare_refuses_a_frame_missing_a_required_column(pooled):
-    """
-    Narrowing the feature set silently is the failure this replaces.
-
-    The old helper kept whichever features happened to be present, so a rebuild that
-    lost a column fitted a smaller model and compared it against the same gate, with
-    nothing in the output saying the inputs had changed.
-    """
+    # The old helper kept whichever features were present, so a rebuild that lost a column fitted a
+    # smaller model against the same gate, with nothing in the output saying the inputs had changed.
     with pytest.raises(ValueError, match="missing required columns"):
         prepare(pooled.drop(columns=["gk_21d"]))
 
@@ -75,7 +60,7 @@ def test_prepare_keeps_every_declared_feature(pooled):
 
 
 def test_prepare_drops_infinities(pooled):
-    """`dropna` passes an infinity straight through to the estimator."""
+    # `dropna` passes an infinity straight through to the estimator.
     poisoned = pooled.copy()
     victim = poisoned.index[len(poisoned) // 2]
     poisoned.loc[victim, "ewma_vol"] = np.inf
@@ -85,7 +70,7 @@ def test_prepare_drops_infinities(pooled):
 
 
 def test_prepare_drops_non_positive_har_inputs(pooled):
-    """HAR takes logs of these; a zero becomes -inf and poisons a fitted coefficient."""
+    # HAR takes logs of these; a zero becomes -inf and poisons a fitted coefficient.
     poisoned = pooled.copy()
     victim = poisoned.index[len(poisoned) // 2]
     poisoned.loc[victim, "rv_1d"] = 0.0
@@ -105,12 +90,8 @@ def test_prepare_drops_rows_with_no_label(pooled):
 # --------------------------------------------------------------------------- #
 
 def ragged_labelled_frame():
-    """
-    Two tickers on one calendar, one of them missing a block of sessions.
-
-    This is the shape that defeats a date-counted embargo, reproduced with the real
-    label builder: ticker B trades on days 0-4, goes quiet, and returns on day 10.
-    """
+    # The shape that defeats a date-counted embargo, built with the real label builder: ticker B
+    # trades on days 0-4, goes quiet, and returns on day 10.
     calendar = pd.bdate_range("2021-01-04", periods=20)
     observed = {"A": calendar, "B": calendar[[0, 1, 2, 3, 4] + list(range(10, 20))]}
 
@@ -126,16 +107,9 @@ def ragged_labelled_frame():
 
 
 def test_a_ragged_ticker_cannot_train_on_a_label_from_the_test_block():
-    """
-    The P1 regression, posed as a contrast between two rows on the *same date*.
-
-    Ticker A trades every session, so its label window closes five days later. Ticker
-    B goes quiet after day 4, so the same row date's label reaches past the gap and
-    closes inside the test block. A date-counted embargo cannot tell them apart — it
-    sees one date and applies one cutoff — so it either keeps both (leaking B) or
-    drops both (throwing away A for nothing). Asking each row for its own `label_end`
-    keeps A and drops B, which is the only correct answer.
-    """
+    # Two rows, same date: A trades daily so its label closes in five days, B goes quiet so its
+    # label reaches past the gap into the test block. One date and one cutoff cannot separate them,
+    # date-counted embargo either leaks B or throws away A. `label_end` keeps A and drops B.
     frame, calendar = ragged_labelled_frame()
     frame = frame[frame[LABEL_END_COL].notna()]
 
@@ -161,7 +135,7 @@ def test_a_ragged_ticker_cannot_train_on_a_label_from_the_test_block():
 
 
 def test_no_training_row_ever_overlaps_its_test_block(pooled):
-    """The same invariant, asserted across every fold of a realistic frame."""
+    # The same invariant, asserted across every fold of a realistic frame.
     clean, _ = prepare(pooled)
 
     folds = list(split_frames(clean, n_splits=3))
@@ -194,12 +168,8 @@ def test_qlike_is_zero_for_a_perfect_forecast():
 
 
 def test_qlike_punishes_under_forecasting_harder_than_over():
-    """
-    The asymmetry is the reason QLIKE is here rather than RMSE alone.
-
-    Under-forecasting risk is the expensive error for a position sizer, and a
-    symmetric loss would rank a model that does it as equal to one that does not.
-    """
+    # Under-forecasting risk is the expensive error for a position sizer, and a symmetric loss would
+    # rank a model that does it as equal to one that does not.
     actual = np.array([0.2, 0.2, 0.2])
     under = _qlike(actual, actual / 2)
     over = _qlike(actual, actual * 2)
@@ -211,12 +181,8 @@ def test_qlike_punishes_under_forecasting_harder_than_over():
 # --------------------------------------------------------------------------- #
 
 def test_smearing_corrects_upward_for_a_log_target():
-    """
-    Exponentiating a log-space fit returns the median, and vol is right-skewed.
-
-    The factor therefore has to exceed 1. Below 1 it would be making the known bias
-    worse, in the direction QLIKE punishes hardest.
-    """
+    # The factor must exceed 1. Below 1 it would be making the known bias worse, in the direction
+    # QLIKE punishes hardest.
     rng = np.random.default_rng(70)
     log_predicted = rng.normal(-2.0, 0.3, 5000)
     log_actual = log_predicted + rng.normal(0.0, 0.4, 5000)
@@ -235,7 +201,7 @@ def test_smearing_of_a_perfect_fit_is_one():
 
 @pytest.fixture
 def saved_har(pooled, tmp_path, monkeypatch):
-    """A trained HAR forecaster on disk. HAR because it is exact and fast."""
+    # A trained HAR forecaster on disk. HAR because it is exact and fast.
     monkeypatch.setattr(vol_forecast, "VOL_MODEL_PATH", tmp_path / "vol_forecast.joblib")
     path = train_vol_model(pooled, kind="har")
 
@@ -244,23 +210,17 @@ def saved_har(pooled, tmp_path, monkeypatch):
 
 
 def test_a_saved_model_carries_its_own_bias_correction(saved_har):
-    """
-    The smearing factor travels with the model, not with the training script.
-
-    Left behind, every forecast reads about 9% low and an inverse-volatility sizer
-    reads that as a calmer market — roughly 10% more exposure per name than intended.
-    """
+    # Left behind, every forecast reads about 9% low and an inverse-vol sizer reads that as a calmer
+    # market — roughly 10% more exposure per name than intended.
     assert saved_har["smearing"] > 1.0
     assert saved_har["log_target"] is True
     assert saved_har["horizon"] == vol_forecast.FORWARD_DAYS
 
 
 def test_prediction_applies_the_log_transform_and_the_smearing_together(pooled, saved_har):
-    """
-    Applying one without the other silently biases every position size, which is
-    exactly why the sizing layer must come through `predict_vol` rather than reach
-    for the estimator inside the payload.
-    """
+    # Applying one without the other silently biases every position size, which is exactly why the
+    # sizing layer must come through `predict_vol` rather than reach for the estimator inside the
+    # payload.
     clean, _ = prepare(pooled)
     rows = clean.head(50)
 
@@ -296,7 +256,7 @@ def test_prediction_refuses_non_positive_inputs_to_a_log_model(pooled, saved_har
 
 
 def test_training_rejects_a_parameter_free_baseline(pooled):
-    """`rw` and `ewma` have nothing to fit; asking to save one is a caller mistake."""
+    # `rw` and `ewma` have nothing to fit; asking to save one is a caller mistake.
     with pytest.raises(ValueError, match="must be 'xgb' or 'har'"):
         train_vol_model(pooled, kind="ewma")
 
@@ -317,10 +277,8 @@ def perfect_baseline_summary() -> dict:
 
 
 def test_the_gate_report_survives_a_perfect_baseline():
-    """
-    A zero baseline loss is a legitimate result with no percentage improvement to
-    report. Dividing by it crashed the gate on a run that should simply have failed.
-    """
+    # A zero baseline loss is a legitimate result with no percentage improvement to report.
+    # Dividing by it crashed the gate on a run that should simply have failed.
     verdict = _report_gate(perfect_baseline_summary(), n_folds=5)
     assert verdict["gate_passed"] is False
     assert verdict["best_by_qlike"] == "ewma"
@@ -345,10 +303,8 @@ def test_the_gate_requires_beating_both_baselines_on_both_metrics():
 # --------------------------------------------------------------------------- #
 
 def test_validation_scores_every_forecaster_on_identical_rows(pooled):
-    """
-    The comparison is only fair if all four score the same rows, which is what makes
-    a difference in QLIKE attributable to the forecast rather than to the sample.
-    """
+    # The comparison is only fair if all four score the same rows, which is what makes a
+    # difference in QLIKE attributable to the forecast rather than to the sample.
     result = validate_vol_forecast(pooled, n_splits=2)
 
     assert set(result["summary"]) == {"rw", "ewma", "har", "xgb"}

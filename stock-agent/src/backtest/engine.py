@@ -1,42 +1,3 @@
-"""
-The event-driven backtest loop.
-
-Phase 2's deliverable. It is built before the strategy on purpose: a backtester
-written after the signal tends to grow, one convenience at a time, into a machine
-for confirming the signal.
-
-The daily sequence, and the reason for each step:
-
-  1. Execute yesterday's decision at today's OPEN. Decisions are made after a
-     close and filled at the next open, so a signal can never be traded at a
-     price that was used to compute it. This single day of separation is the
-     difference between a backtest and a fantasy. A name with no bar that
-     morning is not dropped — the trade is carried to the next session, and the
-     result reports how many sessions that happened on.
-  2. Mark to market at today's CLOSE. NAV, weights, drift.
-  3. If today is a rebalance date, form target weights from data through today's
-     close and hold them for tomorrow's open.
-
-Costs are charged at execution using volume and volatility measured strictly
-before the execution day, so the fill is priced with information the trader
-actually had.
-
-What this engine does not model, stated plainly because unstated assumptions are
-how backtests lie: no intraday fills, no partial fills or rejects, no borrow
-costs or shorting, no dividends beyond what auto-adjusted prices already embed,
-no interest on idle cash unless asked for, and no taxes. Every one of those makes
-the reported result better than reality rather than worse.
-
-Two more that are properties of the data rather than of the loop. Bars are
-split- and dividend-adjusted with today's factors, so the volatility and returns
-the engine sees are not the series a trader in 2006 actually had — unavoidable
-with this source, and standard, but it is still an assumption. And a position in
-a name whose bars stop is marked forward at its last close indefinitely and can
-never be sold, because there is no price to sell it at; that is harmless on a
-universe of survivors and becomes a real problem the moment delisted names are
-added, which is where the roadmap says the universe must eventually go.
-"""
-
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +14,21 @@ from src.data.panel import PricePanel
 from src.data.universe import UniverseSpec
 from src.strategy.weights import Strategy, target_weights
 
+# Built before the strategy on purpose: a backtester written after the signal grows, one
+# convenience at a time, into a machine for confirming the signal.
+
+# Each day: fill yesterday's decision at today's OPEN, mark at today's CLOSE, then form
+# tomorrow's target if today is a rebalance date. That one day of separation — a signal
+# can never be traded at a price used to compute it — is what separates this from fantasy.
+
+# Not modelled, stated plainly because unstated assumptions are how backtests lie: no
+# intraday or partial fills, no rejects, no borrow or shorting, no dividends beyond what
+# adjusted prices embed, no interest on idle cash unless asked, no taxes. All flatter.
+
+# Two data properties, not loop properties. Bars carry today's adjustment factors, so this
+# is not the series a 2006 trader saw; and a name whose bars stop is marked forward forever
+# and can never be sold — harmless on survivors, a real problem once delisted names arrive.
+
 # Windows for the liquidity and risk inputs the cost model needs. Both are lagged
 # by a day before use so an execution is never priced with its own day's data.
 ADV_WINDOW = 21
@@ -66,15 +42,9 @@ REBALANCE_RULES = {"D": None, "W": "W", "M": "ME", "Q": "QE"}
 
 @dataclass
 class BacktestResult:
-    """
-    Everything a run produced, including what is wrong with it.
-
-    `caveats` is not decoration. A Sharpe from this engine is measured over a
-    universe of names that are large caps *today*, which is the one bias no
-    amount of careful accounting inside the loop can remove. Carrying the caveat
-    on the result object means it travels with the number into any report, and
-    `describe` prints it directly under the headline figures.
-    """
+    # `caveats` is not decoration. Survivorship is the one bias no careful accounting
+    # inside the loop can remove, so carrying it on the result means it travels with the
+    # number into any report rather than being left in the console.
 
     equity: pd.Series
     daily: pd.DataFrame
@@ -91,9 +61,8 @@ class BacktestResult:
             format_summary(self.metrics),
             f"  rebalance       {self.meta['rebalance']:>8}   band {self.meta['no_trade_band']:.2%}"
             f"   max weight {self.meta['max_weight']:.0%}",
-            # A universe that never loses a name across twenty years is survivor-only
-            # by construction. Printing both counts says so without anyone having to
-            # write the sentence.
+            # A universe that never loses a name across twenty years is survivor-only by
+            # construction; printing both counts says so without writing the sentence.
             f"  universe        {self.meta['universe_id']}   point-in-time: {pit}"
             f"   names {self.meta['n_names_first']} -> {self.meta['n_names_last']}",
         ]
@@ -120,38 +89,26 @@ def run_backtest(
     cash_annual_rate: float = 0.0,
     caveats: tuple[str, ...] = (),
 ) -> BacktestResult:
-    """
-    Run `strategy` over `panel` and return the full record of what happened.
+    # `universe` is required rather than defaulted because it carries the disclosures that
+    # belong beside every number returned, and an optional argument carrying a disclosure
+    # is an omitted disclosure. `caveats` stays optional for notes specific to one run.
 
-    `universe` is required rather than defaulted because it carries the
-    disclosures that belong beside every number this returns, and an optional
-    argument that carries a disclosure is an omitted disclosure. `caveats` stays
-    optional for notes specific to one run.
+    # `start` bounds only the *trading* window — the strategy still sees history before it,
+    # which is what makes a twelve-month formation window possible on day one.
 
-    `start` only bounds the *trading* window — the strategy still sees history
-    before it, which is what makes a twelve-month formation window possible on
-    day one instead of a year in.
-
-    `cash_annual_rate` defaults to zero, which understates any strategy that
-    holds meaningful cash. That is the safe direction to be wrong in, and Phase 3
-    volatility targeting will hold a lot of cash, so it is worth setting
-    deliberately rather than leaving at the default and forgetting.
-    """
+    # `cash_annual_rate` defaults to zero, understating any strategy that holds meaningful
+    # cash. That is the safe direction, but Phase 3 vol targeting will hold a lot, so it is
+    # worth setting deliberately rather than leaving at the default and forgetting.
     _check_run_limits(initial_cash, no_trade_band, max_weight, max_gross)
 
     marks = panel.closes.ffill()
-    # Valuation prices for the moment of execution: the day's open where there is
-    # one, otherwise the last close from a session strictly *before* today. A
-    # holding with no bar today still has a value, and sizing the rest of the book
-    # against a NAV that has silently dropped it would sell down every healthy
-    # position for no reason.
-    #
-    # The fallback is shifted by a session, and that shift is the whole point.
-    # Today's close is not knowable at today's open, so falling back to it lets a
-    # halted name's *evening* price set the size of this morning's trades in every
-    # other name, through NAV. Measured: with one name's open missing, changing
-    # only that name's close on the same day turned another name's morning order
-    # from nothing into a 125-share sale. Look-ahead that reaches the whole book.
+    # Execution-time valuation: the day's open, else the last close strictly *before*
+    # today. A holding with no bar still has a value, and sizing the book against a NAV
+    # that silently dropped it would sell down every healthy position for no reason.
+
+    # The one-session shift is the point: today's close is not knowable at today's open, so
+    # falling back to it lets a halted name's evening price size this morning's trades in every
+    # other name through NAV — measured, that turned one order into a 125-share sale.
     open_marks = panel.opens.combine_first(marks.shift(1))
     adv_notional = (panel.closes * panel.volumes).rolling(ADV_WINDOW).mean().shift(1)
     daily_vol = (np.log(panel.closes / panel.closes.shift(1))
@@ -164,10 +121,9 @@ def run_backtest(
 
     portfolio = Portfolio(cash=initial_cash)
     pending: pd.Series | None = None
-    # Names a previous session meant to trade but found no price for. While this is
-    # set, the pending target is retried for these names only: the rest of the book
-    # already reached it, and re-planning everything would drag every drifting
-    # position through the band on a day the strategy never asked to rebalance.
+    # Names a previous session meant to trade but found no price for. While set, the pending
+    # target is retried for these names only: the rest of the book already reached it, and
+    # re-planning would drag every drifting position through the band on an unscheduled day.
     owed: frozenset[str] | None = None
     daily_cash_rate = cash_annual_rate / TRADING_DAYS
 
@@ -275,13 +231,9 @@ def run_backtest(
 
 def _check_run_limits(initial_cash: float, no_trade_band: float,
                       max_weight: float, max_gross: float) -> None:
-    """
-    Reject settings that would make the run meaningless before it produces numbers.
-
-    A NaN limit is the one worth spelling out: every comparison against it is False,
-    so it does not error, it just switches the constraint off and returns a plausible
-    equity curve computed without the ceiling anyone thought was applied.
-    """
+    # A NaN limit is the case worth spelling out: every comparison against it is False, so
+    # it does not error — it switches the constraint off and returns a plausible equity
+    # curve computed without the ceiling anyone thought was applied.
     for name, value in (("initial_cash", initial_cash), ("no_trade_band", no_trade_band),
                         ("max_weight", max_weight), ("max_gross", max_gross)):
         if not np.isfinite(value):
@@ -293,12 +245,11 @@ def _check_run_limits(initial_cash: float, no_trade_band: float,
 
 
 def _tradable_count(panel: PricePanel, date: pd.Timestamp, min_history: int) -> int:
-    """How many names were eligible on a date — the cheap tell for a survivor-only universe."""
+    # The cheap tell for a survivor-only universe: this count never falls.
     return len(panel.as_of(date).tradable_as_of(date, min_history=min_history))
 
 
 def _trading_window(panel: PricePanel, start, end) -> pd.DatetimeIndex:
-    """Dates the backtest may trade on. Rows with no price anywhere are dropped."""
     dates = panel.dates[panel.closes.notna().any(axis=1)]
     if start is not None:
         dates = dates[dates >= pd.Timestamp(start)]
@@ -308,10 +259,8 @@ def _trading_window(panel: PricePanel, start, end) -> pd.DatetimeIndex:
 
 
 def _rebalance_dates(dates: pd.DatetimeIndex, rebalance: str) -> pd.DatetimeIndex:
-    """
-    The last trading day of each period — never a calendar date that may be a
-    holiday, which is how a rebalance silently goes missing for a month.
-    """
+    # The last trading day of each period, never a calendar date that may be a holiday —
+    # which is how a rebalance silently goes missing for a month.
     if rebalance not in REBALANCE_RULES:
         raise ValueError(f"rebalance must be one of {sorted(REBALANCE_RULES)}, got {rebalance!r}")
     rule = REBALANCE_RULES[rebalance]
@@ -329,7 +278,6 @@ FILL_COLUMNS = ["date", "ticker", "shares", "ref_price", "fill_price", "notional
 
 
 def _fills_frame(portfolio: Portfolio) -> pd.DataFrame:
-    """Flatten the fill log, keeping the derived columns a post-mortem always needs."""
     if not portfolio.fills:
         return pd.DataFrame(columns=FILL_COLUMNS)
 

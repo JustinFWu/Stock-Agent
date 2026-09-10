@@ -1,10 +1,5 @@
-"""
-Engine behaviour: accounting, execution timing, and the no-trade band.
-
-The synthetic panels make these exact rather than approximate. On a flat panel
-nothing should move; on a drifting panel everything that moves should be
-explainable by a number computed here rather than read off the implementation.
-"""
+# Synthetic panels make these exact rather than approximate: on a flat panel nothing should move,
+# and on a drifting one everything that moves is explainable by a number computed here.
 
 import sys
 from pathlib import Path
@@ -26,7 +21,7 @@ TEST_UNIVERSE = UniverseSpec(id="synthetic", tickers=("AAA", "BBB", "CCC"),
 
 
 def run(panel, universe=TEST_UNIVERSE, **kwargs):
-    """Backtest with the test defaults: short history requirement, no costs unless asked."""
+    # Backtest with the test defaults: short history requirement, no costs unless asked.
     settings = {"universe": universe, "costs": ZERO_COSTS, "min_history": 5,
                 "max_weight": 1.0, "rebalance": "M"}
     settings.update(kwargs)
@@ -34,14 +29,14 @@ def run(panel, universe=TEST_UNIVERSE, **kwargs):
 
 
 def test_flat_prices_produce_a_flat_curve(flat_panel):
-    """No drift, no costs, no reason for NAV to move a cent."""
+    # No drift, no costs, no reason for NAV to move a cent.
     result = run(flat_panel)
     assert result.equity.std() == pytest.approx(0.0, abs=1e-6)
     assert result.metrics["total_return"] == pytest.approx(0.0, abs=1e-9)
 
 
 def test_costs_only_ever_reduce_nav(drifting_panel):
-    """Charging for trading must not, under any configuration, help."""
+    # Charging for trading must not, under any configuration, help.
     free = run(drifting_panel, costs=ZERO_COSTS, rebalance="D", no_trade_band=0.0)
     charged = run(drifting_panel, costs=PESSIMISTIC_COSTS, rebalance="D", no_trade_band=0.0)
     assert charged.equity.iloc[-1] < free.equity.iloc[-1]
@@ -50,19 +45,15 @@ def test_costs_only_ever_reduce_nav(drifting_panel):
 
 
 def test_no_trade_band_suppresses_turnover(drifting_panel):
-    """A wide band must trade strictly less than a zero band on the same path."""
+    # A wide band must trade strictly less than a zero band on the same path.
     tight = run(drifting_panel, rebalance="D", no_trade_band=0.0)
     wide = run(drifting_panel, rebalance="D", no_trade_band=0.05)
     assert wide.metrics["ann_turnover"] < tight.metrics["ann_turnover"]
 
 
 def test_execution_happens_after_the_decision(flat_panel):
-    """
-    The first fill must land on the day *after* the first rebalance date.
-
-    If it ever lands on the decision date itself, the engine is trading on the
-    close it used to decide, and every result it produces is look-ahead.
-    """
+    # If a fill ever lands on the decision date itself, the engine is trading on the close it used
+    # to decide, and every result it produces is look-ahead.
     result = run(flat_panel)
     first_target = result.targets.index[0]
     first_fill = result.fills["date"].min()
@@ -70,13 +61,8 @@ def test_execution_happens_after_the_decision(flat_panel):
 
 
 def test_cash_and_positions_reconcile(drifting_panel):
-    """
-    NAV must equal cash plus marked positions on every single day.
-
-    Recomputed independently from the fill log rather than trusting the running
-    balance, because a bug that corrupts both identically is the one worth
-    catching.
-    """
+    # Recomputed independently from the fill log rather than trusting the running balance, because a
+    # bug that corrupts both identically is the one worth catching.
     result = run(drifting_panel, rebalance="M")
     fills = result.fills
     assert not fills.empty
@@ -100,13 +86,8 @@ def test_cash_and_positions_reconcile(drifting_panel):
 
 
 def test_gross_exposure_never_exceeds_the_ceiling(drifting_panel):
-    """
-    Gross is pinned to the ceiling on rebalance days, and only drifts between them.
-
-    Checked on the rebalance days themselves rather than on the whole path, so
-    the assertion is exact where the constraint is actually applied instead of
-    being loosened to accommodate drift it was never about.
-    """
+    # Checked on the rebalance days rather than the whole path, so the assertion stays exact where
+    # the constraint is applied instead of being loosened to accommodate drift it was never about.
     result = run(drifting_panel, max_gross=0.6, rebalance="M")
     rebalanced = result.daily.loc[result.daily["traded_notional"] > 0, "gross"]
     assert not rebalanced.empty
@@ -115,7 +96,7 @@ def test_gross_exposure_never_exceeds_the_ceiling(drifting_panel):
 
 
 def test_cash_rate_compounds_when_uninvested(flat_panel):
-    """An all-cash run must grow at exactly the cash rate, not merely upward."""
+    # An all-cash run must grow at exactly the cash rate, not merely upward.
     empty_universe = UniverseSpec(id="none", tickers=(), point_in_time=True, caveats=())
     rate = 0.05
     result = run(flat_panel, universe=empty_universe, cash_annual_rate=rate)
@@ -136,24 +117,16 @@ def test_universe_caveats_reach_the_result(flat_panel):
 
 
 def test_oversized_fills_raise_a_caveat(drifting_panel):
-    """
-    Trading a large fraction of daily volume must be flagged, not silently priced.
-
-    The square-root impact law was not estimated at 40% participation; a cost
-    number extrapolated that far should not pass as a measurement.
-    """
+    # The square-root impact law was not estimated at 40% participation; a cost number extrapolated
+    # that far should not pass as a measurement.
     starved = make_panel(drifting_panel.closes, volume=50.0)
     result = run(starved, costs=CostModel(), rebalance="M")
     assert any("average daily volume" in c for c in result.caveats)
 
 
 def test_plan_trades_exits_a_dropped_name_through_the_band():
-    """
-    A name the strategy dropped is sold even when the drift is inside the band.
-
-    Leaving 30bp of a rejected name every rebalance accumulates into a portfolio
-    nobody chose, which is a risk decision made by inaction.
-    """
+    # Leaving 30bp of a rejected name every rebalance accumulates into a portfolio nobody chose,
+    # which is a risk decision made by inaction.
     portfolio = Portfolio(cash=0.0, shares={"AAA": 1.0})
     prices = pd.Series({"AAA": 100.0, "BBB": 100.0})
     plan = plan_trades(pd.Series(dtype=float), portfolio, prices, prices,
@@ -162,13 +135,9 @@ def test_plan_trades_exits_a_dropped_name_through_the_band():
 
 
 def test_buys_are_scaled_to_available_cash():
-    """
-    A rebalance must never quietly borrow to pay its own costs.
-
-    Charged with the pessimistic model on a thin, volatile name — the shortfall a
-    naive scaling misses is precisely the slippage and commission, so testing this
-    with costs switched off cannot fail for the reason it names.
-    """
+    # Charged with the pessimistic model on a thin, volatile name: the shortfall a naive scaling
+    # misses is precisely the slippage and commission, so testing with costs off cannot fail for the
+    # reason it names.
     expensive = CostModel(half_spread_bps=5.0, impact_coef=1.0, commission_per_share=0.005)
     portfolio = Portfolio(cash=1_000.0)
     prices = pd.Series({"AAA": 100.0})
@@ -183,12 +152,8 @@ def test_buys_are_scaled_to_available_cash():
 
 
 def test_untradeable_names_are_reported_not_silently_dropped():
-    """
-    A name with no bar cannot be traded — but it must be *reported* as untraded.
-
-    Omitting it leaves the caller unable to tell a trade nobody wanted from a
-    trade that could not be placed, and only the second one should be retried.
-    """
+    # Omitting it leaves the caller unable to tell a trade nobody wanted from a trade that could not
+    # be placed, and only the second should be retried.
     portfolio = Portfolio(cash=10_000.0)
     prices = pd.Series({"OLD": 100.0, "NEW": np.nan})
     plan = plan_trades(pd.Series({"OLD": 0.5, "NEW": 0.5}), portfolio, prices, prices,
@@ -199,13 +164,9 @@ def test_untradeable_names_are_reported_not_silently_dropped():
 
 
 def test_a_name_nobody_wanted_to_trade_is_not_blocked():
-    """
-    Only a *wanted* trade counts as blocked.
-
-    A name already sitting on its target has nothing owed on it. Reporting it as
-    blocked would make the engine defer a trade that does not exist, and keep
-    deferring it every session for the rest of the rebalance period.
-    """
+    # A name already on its target has nothing owed on it. Reporting it as blocked would defer a
+    # trade that does not exist, and keep deferring it every session for the rest of the rebalance
+    # period.
     portfolio = Portfolio(cash=0.0, shares={"AAA": 100.0, "BBB": 100.0})
     tradable = pd.Series({"AAA": 100.0, "BBB": np.nan})
     marks = pd.Series({"AAA": 100.0, "BBB": 100.0})
@@ -217,12 +178,8 @@ def test_a_name_nobody_wanted_to_trade_is_not_blocked():
 
 
 def test_only_restricts_the_plan_to_the_named_subset():
-    """
-    The deferred retry must not re-plan the whole book.
-
-    Replanning everything would exit every held name absent from the restricted
-    view and rebalance the rest on a day the strategy never asked to trade.
-    """
+    # Replanning everything would exit every held name absent from the restricted view and rebalance
+    # the rest on a day the strategy never asked to trade.
     portfolio = Portfolio(cash=0.0, shares={"AAA": 100.0, "BBB": 100.0})
     prices = pd.Series({"AAA": 100.0, "BBB": 100.0})
 
@@ -232,14 +189,9 @@ def test_only_restricts_the_plan_to_the_named_subset():
 
 
 def test_a_halted_name_does_not_shrink_nav():
-    """
-    A holding with no bar today must still count toward the NAV others are sized against.
-
-    Valuing it at zero drops NAV by its full weight and then sells down every
-    healthy position to hit its share of the smaller portfolio — a fake loss, a
-    fake recovery when the bar returns, and real costs on a trade that should
-    never have been placed.
-    """
+    # Valuing it at zero drops NAV by its full weight and then sells down every healthy position to
+    # hit its share of the smaller portfolio — a fake loss, a fake recovery when the bar returns,
+    # and real costs on a trade that should never have been placed.
     portfolio = Portfolio(cash=0.0, shares={"AAA": 100.0, "BBB": 100.0})
     tradable = pd.Series({"AAA": 100.0, "BBB": np.nan})   # BBB halted: no execution price
     marks = pd.Series({"AAA": 100.0, "BBB": 100.0})       # but still worth its last close
@@ -250,7 +202,7 @@ def test_a_halted_name_does_not_shrink_nav():
 
 
 def test_no_rebalance_in_the_window_is_flagged(flat_panel):
-    """A window too short to hold a rebalance must not report a clean 0% as a result."""
+    # A window too short to hold a rebalance must not report a clean 0% as a result.
     dates = flat_panel.dates
     result = run(flat_panel, start=dates[0], end=dates[10], rebalance="Q")
     assert result.fills.empty

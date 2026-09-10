@@ -1,9 +1,5 @@
-"""
-The risk constraints applied to every strategy's proposal.
-
-These run in one place so a new strategy inherits them and cannot forget them,
-which also means a bug here silently affects every strategy at once.
-"""
+# These run in one place so a new strategy inherits them and cannot forget them, which also means
+# a bug here silently affects every strategy at once.
 
 import sys
 from pathlib import Path
@@ -20,7 +16,7 @@ UNIVERSE = UniverseSpec(id="synthetic", tickers=("AAA", "BBB", "CCC"),
 
 
 class FixedProposal:
-    """Returns whatever it was constructed with, so constraints can be tested alone."""
+    # Returns whatever it was constructed with, so constraints can be tested alone.
 
     name = "fixed"
 
@@ -39,15 +35,9 @@ def weights_for(panel, proposal: dict, scale: str = "absolute", **kwargs) -> pd.
 
 
 def test_conviction_scores_keep_their_shape(flat_panel):
-    """
-    A proposal on a scale other than portfolio fractions must survive the limits.
-
-    Clipping before scaling would push every one of these above-cap scores down to
-    exactly `max_weight`, and the gross rescaling would then hand back a perfectly
-    equal-weight portfolio — the strategy's entire signal deleted, silently, with
-    output that looks completely reasonable.
-    """
-    # Cap lifted so only the scaling step is under test; the cap has its own test.
+    # Clipping before scaling would push every above-cap score down to exactly `max_weight`, and
+    # the gross rescaling would hand back a perfectly equal-weight portfolio — the entire signal
+    # deleted, silently. The cap is lifted here so only the scaling step is under test.
     result = weights_for(flat_panel, {"AAA": 8.0, "BBB": 4.0, "CCC": 2.0},
                          scale="relative", max_weight=1.0)
 
@@ -57,15 +47,9 @@ def test_conviction_scores_keep_their_shape(flat_panel):
 
 
 def test_relative_proposals_ignore_their_own_magnitude(flat_panel):
-    """
-    The same conviction shape must produce the same portfolio at any magnitude.
-
-    This is the ambiguity the scale declaration exists to remove. Inverse-vol
-    scores sum to whatever their units happen to give — 0.7 for one date's
-    volatilities, 14 for another's — and without the declaration that arbitrary
-    number silently became the invested fraction, so the book drifted between 70%
-    and fully invested for reasons no one chose.
-    """
+    # The ambiguity the scale declaration removes. Inverse-vol scores sum to whatever their units
+    # give — 0.7 for one date, 14 for another — and undeclared, that arbitrary number became the
+    # invested fraction, drifting the book between 70% and fully invested for reasons no one chose.
     small = weights_for(flat_panel, {"AAA": 0.04, "BBB": 0.02, "CCC": 0.01},
                         scale="relative", max_weight=1.0)
     large = weights_for(flat_panel, {"AAA": 400.0, "BBB": 200.0, "CCC": 100.0},
@@ -76,12 +60,8 @@ def test_relative_proposals_ignore_their_own_magnitude(flat_panel):
 
 
 def test_an_undeclared_scale_is_refused(flat_panel):
-    """
-    A strategy that does not say what its numbers mean must not be guessed at.
-
-    Defaulting either way is silently wrong for half of all strategies, and wrong
-    in a way that yields a plausible portfolio rather than an error.
-    """
+    # Defaulting either way is silently wrong for half of all strategies, and wrong in a way that
+    # yields a plausible portfolio rather than an error.
     class Undeclared:
         name = "undeclared"
 
@@ -99,16 +79,9 @@ def test_per_name_cap_binds(flat_panel):
 
 
 def test_deliberate_cash_is_not_scaled_up(flat_panel):
-    """
-    A proposal summing to less than 1 means "hold cash" and must be left alone.
-
-    This is how Phase 3's volatility targeting expresses that the market is
-    dangerous. Anything that renormalised to fully invested would delete the one
-    decision the sizing layer exists to make.
-
-    Only on the absolute scale, where the number is a claim about NAV. The same
-    proposal declared relative carries no such claim and is normalised.
-    """
+    # How Phase 3's vol targeting says the market is dangerous. Renormalising to fully invested
+    # would delete the one decision the sizing layer exists to make. Only on the absolute scale —
+    # the same proposal declared relative carries no claim about NAV and is normalised.
     result = weights_for(flat_panel, {"AAA": 0.2, "BBB": 0.1}, max_weight=0.5)
     assert result.sum() == pytest.approx(0.3)
 
@@ -125,7 +98,7 @@ def test_non_finite_and_negative_proposals_are_dropped(flat_panel):
 
 
 def test_a_name_outside_the_universe_is_ignored(flat_panel):
-    """Membership is enforced here, not left to the strategy's good behaviour."""
+    # Membership is enforced here, not left to the strategy's good behaviour.
     result = weights_for(flat_panel, {"AAA": 0.5, "ZZZ": 0.5})
     assert "ZZZ" not in result.index
 

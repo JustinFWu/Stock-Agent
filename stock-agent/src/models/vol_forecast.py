@@ -1,29 +1,3 @@
-"""
-Volatility forecasting: the Phase 1 gate.
-
-The question is narrow and pre-committed: does a gradient-boosted model forecast next
-week's realized volatility better than cheap, well-established baselines? If it does
-not, the baseline ships and the model is deleted. The failure mode this guards against
-is the one the previous branch fell into — keeping a model because it is a model.
-
-Four forecasters, evaluated on identical rows:
-
-  rw     random walk. Today's 21-day realized vol, carried forward. Zero parameters.
-         The "do nothing" bar; anything that cannot beat this is not a forecast.
-  ewma   RiskMetrics exponentially weighted variance, lambda fixed at 0.94. Zero
-         fitted parameters. The industry default.
-  har    Corsi's HAR-RV: log forward vol regressed on log realized vol at daily,
-         weekly and monthly horizons. Three coefficients, refit each fold. Captures
-         volatility's long-memory cascade and is notoriously hard to beat.
-  xgb    Gradient boosting on the full feature set, same log target as HAR.
-
-Scoring uses both QLIKE and RMSE because they disagree in an informative way. RMSE is
-symmetric and dominated by high-vol days; QLIKE is the loss implied by a Gaussian
-likelihood, penalises under-forecasting far more than over-forecasting, and is robust
-to noise in the volatility proxy. A model that wins on one and loses on the other has
-not earned the gate.
-"""
-
 import sys
 from pathlib import Path
 
@@ -36,6 +10,14 @@ from xgboost import XGBRegressor
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import MODELS_DIR, FORWARD_DAYS
 from src.storage import atomic_path
+
+# A pre-committed gate: xgb must forecast next week's realized vol better than cheap,
+# well-established baselines, or the baseline ships and the model is deleted. The failure
+# mode this guards against is the previous branch's — keeping a model because it is a model.
+
+# Both QLIKE and RMSE, because they disagree informatively. RMSE is symmetric and dominated
+# by high-vol days; QLIKE is the Gaussian-likelihood loss, punishes under-forecasting far
+# harder, and is robust to proxy noise. Winning one and losing the other is not a pass.
 
 LABEL_COL = "forward_vol"
 # The date each row's label window closes on. Carried from `labels.target` so the
@@ -62,16 +44,16 @@ HAR_FEATURES = ["rv_1d", "rv_5d", "rv_21d"]
 
 VOL_MODEL_PATH = MODELS_DIR / "vol_forecast.joblib"
 
-# Everything a frame must carry to be trainable or scoreable. Stated as one list
-# because a *partial* frame is the dangerous case: narrowing the feature set to
-# whatever happened to be present fits a different model against the same gate,
-# with no error and no record of what changed.
+# One list, because a *partial* frame is the dangerous case: narrowing the feature set to
+# whatever happened to be present fits a different model against the same gate, with no
+# error and no record of what changed.
 REQUIRED_COLUMNS = list(dict.fromkeys(
     VOL_FEATURES + HAR_FEATURES + [LABEL_COL, LABEL_END_COL]))
 
 
 def _build_model() -> XGBRegressor:
-    """The single XGBoost configuration shared by validation and the saved model."""
+    # One configuration shared by validation and the saved model, so the gate scores the
+    # thing that ships.
     return XGBRegressor(n_estimators=400, max_depth=4, learning_rate=0.05,
                         subsample=0.8, colsample_bytree=0.8,
                         objective="reg:squarederror",
@@ -79,23 +61,13 @@ def _build_model() -> XGBRegressor:
 
 
 def _date_windows(dates, n_splits: int = 5):
-    """
-    Yield (fold, train_dates, test_dates) for expanding-window splits over the sorted
-    unique dates. Time order is never shuffled.
+    # Expanding windows split on dates, not row position — that is what makes it valid for
+    # a pooled multi-ticker frame, where "train on the past, test on the next block" must
+    # hold for every ticker at once even though many rows share each date.
 
-    Splitting on dates rather than row position is what makes this valid for a pooled
-    multi-ticker frame: "train on the past, test on the next block" then holds for every
-    ticker at once, even though many rows share each date.
-
-    No embargo is applied here, deliberately. The blocks are handed over whole and the
-    caller purges them against each row's own `label_end`, because a fixed number of
-    calendar dates is the wrong unit for a ragged panel: a label looks ahead `horizon`
-    *observed bars of one ticker*, and for a ticker with missing sessions that lands
-    well past the `horizon`-th pooled date. Such a row clears a date-counted embargo
-    while its label is measured from inside the test block — reproduced on a 20-day
-    calendar, where a ticker seen on days 0-4 and 10-19 kept a training row whose
-    label ended on day 14, four days into the test block.
-    """
+    # No embargo here, deliberately: the caller purges against each row's own `label_end`.
+    # A calendar-date count is the wrong unit for a ragged panel — reproduced on a 20-day
+    # calendar, a ticker seen on days 0-4 and 10-19 kept a training row labelled to day 14.
     if n_splits < 1:
         raise ValueError(f"n_splits must be at least 1, got {n_splits}")
 
@@ -108,19 +80,9 @@ def _date_windows(dates, n_splits: int = 5):
 
 
 def split_frames(clean: pd.DataFrame, n_splits: int = 5):
-    """
-    Yield (fold, train, test) frames, with training rows purged of label overlap.
-
-    Separated from `validate_vol_forecast` because this is where the walk-forward
-    validity actually lives, and a property only observable through a model score is
-    a property nobody checks. The invariant is one line and worth stating: every
-    training row's `label_end` falls strictly before the first date of the test
-    block, so no row is ever fitted on an outcome measured inside the block it is
-    about to be graded on.
-
-    Purging on the row's own label end rather than on a count of calendar dates is
-    the part that matters for a ragged panel — see `_date_windows`.
-    """
+    # Separate from `validate_vol_forecast` because this is where walk-forward validity
+    # lives, and a property only observable through a model score is one nobody checks.
+    # Invariant: every training row's `label_end` falls strictly before the test block.
     for fold, train_dates, test_dates in _date_windows(clean.index, n_splits):
         test = clean[clean.index.isin(test_dates)]
         if test.empty:
@@ -134,45 +96,32 @@ def split_frames(clean: pd.DataFrame, n_splits: int = 5):
         yield fold, train, test
 
 
-# --------------------------------------------------------------------------- #
-# Forecasters. Each takes (train, test, feature_cols) and returns a volatility
-# forecast per test row, in the same annualized units as the label.
-# --------------------------------------------------------------------------- #
+# Each forecaster takes (train, test, feature_cols) and returns one volatility forecast per
+# test row, in the same annualized units as the label.
 
 def _forecast_rw(train: pd.DataFrame, test: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
-    """Random walk: next week's vol equals the trailing 21-day realized vol."""
+    # Zero parameters — the "do nothing" bar. Anything that cannot beat it is not a forecast.
     return test["rv_21d"].to_numpy()
 
 
 def _forecast_ewma(train: pd.DataFrame, test: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
-    """EWMA variance carried forward. Computed as a feature so one definition serves both uses."""
+    # Computed as a feature so the baseline and the feature cannot drift apart.
     return test["ewma_vol"].to_numpy()
 
 
 def _smearing_factor(log_actual: np.ndarray, log_predicted: np.ndarray) -> float:
-    """
-    Duan's smearing estimator, for undoing the bias introduced by fitting in logs.
+    # Duan's smearing estimator. Fitting log(vol) under squared error and exponentiating
+    # forecasts the conditional MEDIAN, not the mean, and vol is right-skewed: the factor
+    # is ~1.10 here, so an uncorrected forecast reads ~9% low and QLIKE punishes it hard.
 
-    Fitting log(vol) under squared-error loss and exponentiating produces a forecast of
-    the conditional MEDIAN, not the mean, and for a right-skewed quantity like
-    volatility the median sits below the mean. Measured here the correction factor is
-    about 1.10, so an uncorrected forecast reads roughly 9% *low* — which QLIKE, being
-    deliberately asymmetric against under-forecasting, punishes hard. Left uncorrected
-    it makes a log-target model look worse than a direct-variance one for reasons that
-    have nothing to do with forecast skill.
-
-    The correction is mean(exp(residual)), estimated on TRAINING residuals only so no
-    test-block information leaks into the forecast. It is applied identically to HAR
-    and XGBoost, both of which fit in logs, keeping their comparison fair.
-    """
+    # Estimated on TRAINING residuals only, so no test-block information leaks in, and
+    # applied identically to HAR and XGBoost — both fit in logs — keeping them comparable.
     return float(np.mean(np.exp(log_actual - log_predicted)))
 
 
 def _forecast_har(train: pd.DataFrame, test: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
-    """
-    HAR-RV in logs. Working in logs keeps forecasts positive without clipping and makes
-    the residuals roughly homoskedastic, which ordinary least squares assumes.
-    """
+    # Corsi's daily/weekly/monthly cascade, notoriously hard to beat. Logs keep forecasts
+    # positive without clipping and make the residuals roughly homoskedastic, which OLS assumes.
     log_train_x = np.log(train[HAR_FEATURES])
     log_train_y = np.log(train[LABEL_COL].to_numpy())
 
@@ -183,7 +132,7 @@ def _forecast_har(train: pd.DataFrame, test: pd.DataFrame, feature_cols: list[st
 
 
 def _forecast_xgb(train: pd.DataFrame, test: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
-    """Gradient boosting on the same log target as HAR, so the two are directly comparable."""
+    # Same log target as HAR, so the two are directly comparable.
     log_train_y = np.log(train[LABEL_COL].to_numpy())
 
     model = _build_model()
@@ -206,11 +155,8 @@ _EPS = 1e-12
 
 
 def _qlike(actual_vol: np.ndarray, forecast_vol: np.ndarray) -> float:
-    """
-    QLIKE on variances: mean(a/f - log(a/f) - 1), which is zero for a perfect forecast
-    and grows sharply when the forecast is too low. Asymmetric on purpose — under-
-    forecasting risk is the expensive error for a position sizer.
-    """
+    # Zero for a perfect forecast, growing sharply when the forecast is too low.
+    # Asymmetric on purpose: under-forecasting risk is the expensive error for a sizer.
     a = np.maximum(actual_vol.astype(float) ** 2, _EPS)
     f = np.maximum(forecast_vol.astype(float) ** 2, _EPS)
     ratio = a / f
@@ -218,32 +164,21 @@ def _qlike(actual_vol: np.ndarray, forecast_vol: np.ndarray) -> float:
 
 
 def _rmse(actual_vol: np.ndarray, forecast_vol: np.ndarray) -> float:
-    """RMSE in annualized volatility points. Monotone in MSE, so the ranking is identical."""
+    # Annualized volatility points. Monotone in MSE, so the ranking is identical.
     return float(np.sqrt(np.mean((actual_vol.astype(float) - forecast_vol.astype(float)) ** 2)))
 
 
 def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Drop rows that cannot be honestly trained or scored on, and return the features.
+    # Three checks, because `dropna` alone passes all three values that cause trouble here.
+    # Schema: narrowing the feature set to whatever the frame carried fits a different model
+    # against the same gate, with nothing in the output saying the inputs changed.
 
-    Three checks, because `dropna` on its own passes all three of the values that
-    actually cause trouble here:
+    # Finiteness: an infinity survives `dropna` and reaches the estimator — `ewma_vol` can
+    # produce one off a zero-variance stretch. Positivity: a zero realised vol is legitimate
+    # for a halted week and becomes -inf under the log, poisoning a coefficient rather than raising.
 
-      schema      every required column must be present. Silently narrowing the
-                  feature set to whatever the frame happened to carry fits a
-                  different model and compares it against the same gate, with no
-                  error and nothing in the output saying the inputs changed.
-      finiteness  NaN is not the only missing value. An infinity survives `dropna`
-                  and reaches the estimator — `ewma_vol` can produce one off a
-                  zero-variance stretch, and the mandatory EWMA baseline is then
-                  scored against it.
-      positivity  HAR and the log target take logs. A zero realised volatility is a
-                  legitimate reading for a halted week and becomes -inf under the
-                  log, poisoning a fitted coefficient instead of raising.
-
-    Rows removed are counted and printed. A preparation step that quietly discards
-    most of the data looks exactly like one that worked.
-    """
+    # Removed rows are counted and printed: a step that quietly discards most of the data
+    # looks exactly like one that worked.
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(
@@ -272,20 +207,12 @@ def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
 
 def validate_vol_forecast(df: pd.DataFrame, n_splits: int = 5) -> dict:
-    """
-    Walk-forward comparison of every forecaster on identical out-of-sample rows.
+    # Read the fold-level numbers, not just the pooled ones: a model that wins overall while
+    # losing half the folds has found a regime, not a forecast.
 
-    Reports QLIKE and RMSE per fold and pooled across all folds, then states plainly
-    whether XGBoost cleared the gate against both EWMA and HAR-RV on both metrics.
-
-    Read the fold-level numbers, not just the pooled ones. A model that wins overall
-    while losing on half the folds has found a regime, not a forecast.
-
-    One caveat on precision: consecutive rows share overlapping forward windows, so the
-    errors are autocorrelated and the effective sample is smaller than the row count
-    suggests. That affects how confident to be in a narrow margin; it does not bias the
-    comparison between models, which all score the same rows.
-    """
+    # Consecutive rows share overlapping forward windows, so errors are autocorrelated and
+    # the effective sample is smaller than the row count. That affects confidence in a narrow
+    # margin; it does not bias the comparison, since every model scores the same rows.
     clean, feature_cols = prepare(df)
     if clean.empty:
         raise ValueError("No rows left after dropping NaN features/labels.")
@@ -349,7 +276,6 @@ def validate_vol_forecast(df: pd.DataFrame, n_splits: int = 5) -> dict:
 
 
 def _report_gate(summary: dict, n_folds: int) -> dict:
-    """Print the pre-committed pass/fail and return it."""
     print("\n=== Phase 1 gate ===")
     print("  XGBoost must beat BOTH EWMA and HAR-RV on BOTH QLIKE and RMSE.")
 
@@ -360,10 +286,9 @@ def _report_gate(summary: dict, n_folds: int) -> dict:
             baseline_score = summary[baseline][metric]
             better = xgb[metric] < baseline_score
             checks.append(better)
-            # A zero baseline loss is a perfect baseline forecast — unlikely, but a
-            # legitimate result, and there is no percentage improvement over zero to
-            # report. Dividing anyway crashes the gate on a run that should simply
-            # have failed it, so the absolute gap is printed instead.
+            # A zero baseline loss is unlikely but legitimate, and there is no percentage
+            # improvement over zero. Dividing anyway crashes the gate on a run that should
+            # simply have failed it, so the absolute gap is printed instead.
             margin = (f"{(baseline_score - xgb[metric]) / baseline_score:+.1%}"
                       if baseline_score > 0 else f"{baseline_score - xgb[metric]:+.4f} abs")
             print(f"  {'PASS' if better else 'FAIL'}  xgb {metric:<5} {xgb[metric]:.4f} "
@@ -382,13 +307,8 @@ def _report_gate(summary: dict, n_folds: int) -> dict:
 
 
 def train_vol_model(df: pd.DataFrame, kind: str = "xgb") -> Path:
-    """
-    Fit the chosen forecaster on the full history and save it for downstream sizing.
-
-    `kind` is a deliberate argument rather than a constant: if the gate fails, the
-    baseline is what gets saved, and the sizing layer neither knows nor cares which
-    one it loaded.
-    """
+    # `kind` is an argument rather than a constant because if the gate fails, the baseline
+    # is what gets saved — and the sizing layer neither knows nor cares which it loaded.
     if kind not in ("xgb", "har"):
         raise ValueError(f"kind must be 'xgb' or 'har' (parameter-free baselines need no fitting), got {kind!r}")
 
@@ -409,18 +329,17 @@ def train_vol_model(df: pd.DataFrame, kind: str = "xgb") -> Path:
         payload = {"kind": "har", "model": model, "features": HAR_FEATURES,
                    "log_input": True}
 
-    # Saved alongside the model so production forecasts carry the same bias correction
-    # validation measured them with. Without it every forecast reads about 9% low, and
-    # an inverse-volatility sizer reading a calmer market than the one it is in takes
-    # roughly 10% *more* exposure per name than intended, before the cap binds.
+    # Saved with the model so production carries the correction validation measured it with.
+    # Without it every forecast reads ~9% low, and an inverse-vol sizer reading a calmer
+    # market than the one it is in takes ~10% more exposure per name than intended.
     payload["smearing"] = _smearing_factor(log_y, model.predict(x))
     payload["log_target"] = True
     payload["horizon"] = FORWARD_DAYS
     payload["trained_rows"] = len(clean)
     payload["trained_through"] = str(clean.index.max().date())
 
-    # Written through a temporary file: this is the only saved model, and an
-    # interrupted dump over the live path destroys the one that was working.
+    # This is the only saved model: an interrupted dump over the live path would destroy
+    # the one that was working.
     with atomic_path(VOL_MODEL_PATH) as tmp:
         joblib.dump(payload, tmp)
     print(f"Saved {kind} vol forecaster -> {VOL_MODEL_PATH}  "
@@ -430,19 +349,13 @@ def train_vol_model(df: pd.DataFrame, kind: str = "xgb") -> Path:
 
 
 def predict_vol(payload: dict, df: pd.DataFrame) -> np.ndarray:
-    """
-    Apply a saved forecaster to a feature frame, returning annualized volatility.
+    # The sizing layer must come through here rather than calling the estimator directly:
+    # the log transform and the smearing correction are part of the forecast, and applying
+    # one without the other silently biases every position size.
 
-    The sizing layer should always come through here rather than calling the estimator
-    directly — the log transform and the smearing correction are part of the forecast,
-    and applying one without the other silently biases every position size.
-
-    The inputs are checked the way `prepare` checks them at training time, against the
-    feature list stored *in the payload* rather than the module constant. A model has
-    to be scored on the columns it was fitted on: reading the constant instead would
-    silently reorder or extend the matrix the day a feature is added, and the estimator
-    would accept it and return numbers.
-    """
+    # Checked against the feature list stored *in the payload*, not the module constant. A
+    # model has to be scored on the columns it was fitted on — reading the constant would
+    # reorder or extend the matrix the day a feature is added, and the estimator would accept it.
     features = list(payload["features"])
     missing = [c for c in features if c not in df.columns]
     if missing:

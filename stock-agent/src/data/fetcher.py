@@ -1,27 +1,3 @@
-"""
-Fetches OHLCV data via yfinance and stores it as parquet.
-
-Two things here are load-bearing for everything downstream:
-
-  * auto_adjust=True. Prices come back split- and dividend-adjusted. Over a 20-year
-    window unadjusted closes would put a fake -50% return on every split date, which
-    would wreck both the momentum formation return and the realized-vol estimate.
-
-  * A fetch manifest. Bars are cached by ticker, so a change to HISTORY_START would
-    otherwise be silently ignored and the model would train on whatever window
-    happened to be on disk. The manifest records the window each file was fetched
-    with and forces a refetch when it no longer matches. It is also what
-    `dataset._fingerprint` hashes, so replacing the bars invalidates every frame
-    derived from them.
-
-Writes go through `storage.atomic_path`: an interrupted fetch must not leave a
-truncated parquet where the next run expects twenty years of bars. What that does
-*not* fix is two processes fetching at once — the manifest is a read-modify-write
-with no lock, so overlapping fetchers can still drop each other's entries. Fetching
-is a single foreground command today, so this is a documented limit rather than a
-solved problem.
-"""
-
 import json
 import sys
 import time
@@ -39,9 +15,12 @@ MANIFEST_PATH = RAW_DIR / "_manifest.json"
 FETCH_ATTEMPTS = 3
 FETCH_BACKOFF_SECONDS = 2.0
 
+# The manifest is a read-modify-write with no lock, so overlapping fetchers can drop
+# each other's entries. Fetching is a single foreground command today; documented limit.
+
 
 class FetchError(RuntimeError):
-    """Raised when a ticker's bars could not be downloaded."""
+    pass
 
 
 def _load_manifest() -> dict:
@@ -59,21 +38,19 @@ def _save_manifest(manifest: dict) -> None:
 
 
 def manifest_entry(ticker: str) -> dict:
-    """
-    What the manifest records about a ticker's cached bars, or {} if it has none.
-
-    Public because the derived-feature cache fingerprints it: a frame built from a
-    particular download must stop being trusted the moment that download is replaced,
-    and `fetched_at` is what makes that visible.
-    """
+    # Public because the derived-feature cache fingerprints it: a frame built from one
+    # download must stop being trusted the moment that download is replaced, and
+    # `fetched_at` is what makes that visible.
     return _load_manifest().get(ticker.upper(), {})
 
 
 def _download(ticker: str, start: str, interval: str) -> pd.DataFrame:
-    """Download with retries — yfinance fails transiently often enough over ~90 tickers."""
+    # Retries because yfinance fails transiently often enough over ~90 tickers.
     last_error = None
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         try:
+            # auto_adjust: unadjusted closes would put a fake -50% return on every split
+            # date, wrecking both the momentum formation return and the vol estimate.
             df = yf.download(ticker, start=start, interval=interval,
                              auto_adjust=True, progress=False, threads=False)
             if not df.empty:
@@ -88,7 +65,6 @@ def _download(ticker: str, start: str, interval: str) -> pd.DataFrame:
 
 def fetch_and_save(ticker: str, start: str = HISTORY_START,
                    interval: str = DEFAULT_INTERVAL) -> pd.DataFrame:
-    """Download adjusted OHLCV for a ticker from `start` onward and cache it as parquet."""
     ticker = ticker.upper()
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +80,8 @@ def fetch_and_save(ticker: str, start: str = HISTORY_START,
     with atomic_path(path) as tmp:
         df.to_parquet(tmp)
 
+    # Without this record a change to HISTORY_START would be silently ignored and the
+    # model would train on whatever window happened to be on disk.
     manifest = _load_manifest()
     manifest[ticker] = {
         "start": start,
@@ -119,13 +97,8 @@ def fetch_and_save(ticker: str, start: str = HISTORY_START,
 
 def is_current(ticker: str, start: str = HISTORY_START,
                interval: str = DEFAULT_INTERVAL) -> bool:
-    """
-    True if this ticker's cached bars were fetched with the window we're asking for.
-
-    Deliberately does not care how *recent* the last bar is — staleness at the front
-    of the series is an execution-time concern, handled where live signals are formed.
-    This only answers "was this file built for the window I want".
-    """
+    # Answers only "was this file built for the window I want". How *recent* the last bar
+    # is stays an execution-time concern, handled where live signals are formed.
     ticker = ticker.upper()
     if not (RAW_DIR / f"{ticker}.parquet").exists():
         return False
@@ -134,7 +107,6 @@ def is_current(ticker: str, start: str = HISTORY_START,
 
 
 def load_bars(ticker: str) -> pd.DataFrame:
-    """Load previously fetched OHLCV data from parquet."""
     ticker = ticker.upper()
     path = RAW_DIR / f"{ticker}.parquet"
     if not path.exists():

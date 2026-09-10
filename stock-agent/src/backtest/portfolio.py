@@ -1,18 +1,3 @@
-"""
-Portfolio accounting and order generation.
-
-Deliberately dumb about strategy and deliberately careful about cash: every
-dollar is either in a position or in the cash balance, and the only way shares
-change is through a fill that also moves cash. If those two ever disagree the
-equity curve is fiction, so `apply_fill` is the single mutation point.
-
-The no-trade band lives here too, because it is an accounting decision rather
-than a strategy one. Volatility targeting produces a slightly different ideal
-weight every single day; following it exactly means trading every day, and the
-turnover eats more than the tracking error it removes. The band says: only move
-when the portfolio has drifted far enough from target to be worth paying for.
-"""
-
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,11 +8,17 @@ import pandas as pd
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from src.backtest.costs import CostModel
 
+# Every dollar is either in a position or in cash, and shares change only through a fill
+# that also moves cash. If those disagree the equity curve is fiction, so `apply_fill` is
+# the single mutation point.
+
+# The no-trade band lives here because it is an accounting decision, not a strategy one:
+# vol targeting produces a slightly different ideal weight daily, and following it exactly
+# costs more turnover than the tracking error it removes.
+
 
 @dataclass(frozen=True)
 class Fill:
-    """One executed trade, with its costs itemised for attribution."""
-
     date: pd.Timestamp
     ticker: str
     shares: float           # signed: positive buys, negative sells
@@ -60,14 +51,9 @@ AFFORDABILITY_ITERATIONS = 40
 
 @dataclass(frozen=True)
 class TradePlan:
-    """
-    What to trade, and what could not be traded.
-
-    `blocked` is the part a bare Series of deltas cannot express: names the plan
-    genuinely wanted to move but found no execution price for. Without it the
-    caller cannot tell "nothing to do here" apart from "this trade did not
-    happen", and those call for opposite responses.
-    """
+    # `blocked` is what a bare Series of deltas cannot express: names the plan wanted to
+    # move but found no execution price for. Without it the caller cannot tell "nothing to
+    # do here" from "this trade did not happen", and those call for opposite responses.
 
     deltas: pd.Series
     blocked: tuple[str, ...] = ()
@@ -75,29 +61,23 @@ class TradePlan:
 
 @dataclass
 class Portfolio:
-    """Cash plus share counts. Fractional shares are allowed — Alpaca supports them."""
+    # Fractional shares are allowed — Alpaca supports them.
 
     cash: float
     shares: dict[str, float] = field(default_factory=dict)
     fills: list[Fill] = field(default_factory=list)
 
     def position_value(self, prices: pd.Series) -> float:
-        """
-        Marked value of all holdings.
-
-        The engine passes forward-filled closes for marking, so a name that is
-        merely missing a bar holds its last price rather than dropping to zero and
-        printing a round trip of fake loss and fake gain in the equity curve. The
-        zero fallback below is for a name that has never had a price at all, which
-        can only be a bug upstream.
-        """
+        # The engine passes forward-filled closes, so a name merely missing a bar holds its
+        # last price instead of dropping to zero and printing a round trip of fake loss and
+        # fake gain. The zero fallback is for a name that never had a price — a bug upstream.
         return float(sum(qty * _price_or_zero(prices, ticker) for ticker, qty in self.shares.items()))
 
     def nav(self, prices: pd.Series) -> float:
         return self.cash + self.position_value(prices)
 
     def weights(self, prices: pd.Series) -> pd.Series:
-        """Current portfolio weights. Sums to less than 1 by the cash fraction."""
+        # Sums to less than 1 by the cash fraction.
         nav = self.nav(prices)
         if nav <= 0:
             return pd.Series(dtype=float)
@@ -105,14 +85,9 @@ class Portfolio:
         return pd.Series(held, dtype=float).sort_index()
 
     def apply_fill(self, fill: Fill) -> None:
-        """
-        The only place shares and cash change.
-
-        Slippage is already inside `fill_price`, so the cash movement is just
-        signed notional at the fill price plus the explicit commission. Costs are
-        never subtracted twice — the itemised spread and impact figures on the
-        fill exist for reporting, not for accounting.
-        """
+        # Slippage is already inside `fill_price`, so the cash movement is signed notional
+        # at the fill price plus commission. The itemised spread and impact figures exist
+        # for reporting, not accounting — costs must never be subtracted twice.
         self.cash -= fill.shares * fill.fill_price + fill.commission
         self.shares[fill.ticker] = self.shares.get(fill.ticker, 0.0) + fill.shares
         if abs(self.shares[fill.ticker]) < 1e-9:
@@ -130,46 +105,22 @@ def plan_trades(
     exit_removed: bool = True,
     only: frozenset[str] | None = None,
 ) -> TradePlan:
-    """
-    Share deltas that move the portfolio toward `target`, subject to the band.
+    # Two price vectors, and the distinction is load-bearing. `prices` are the raw bars a
+    # trade would execute at; `marks` are valuation prices carried forward when a bar is
+    # missing, and are what NAV and the current weights come from.
 
-    Two price vectors, and the distinction is load-bearing. `prices` are the raw
-    bars a trade would actually execute at — a name with no bar cannot be traded
-    at any price. `marks` are the valuation prices, carried forward when a bar is
-    missing, and they are what NAV and the current weights are computed from.
-
-    Sizing against raw prices instead would value a halted holding at zero, drop
-    NAV by that name's full weight, and then dutifully sell down every *healthy*
-    position to hit its target share of the smaller portfolio — a fake loss, a
-    fake recovery the next day when the bar returns, and real costs on a trade
-    that should never have been placed.
-
-    Names drifting inside the band are left alone. A name the strategy has
-    dropped entirely is exited regardless of the band when `exit_removed` is set:
-    a position the strategy no longer wants is a risk decision, not a rebalancing
-    nicety, and leaving 30bp of a name the signal rejected accumulates into a
-    portfolio nobody chose.
-
-    Trades that clear the band go the full distance to target rather than only to
-    the band edge. Trading to the edge would leave the portfolio permanently at
-    its maximum tolerated error and guarantee another trade shortly after.
-
-    A name the plan wants to move but has no price for is reported in `blocked`
-    rather than quietly omitted. It is the difference between a trade nobody asked
-    for and a trade that could not be placed, and only the caller knows whether to
-    retry it — see the engine, which carries blocked names to the next session.
-
-    `only` restricts the plan to a subset of names, which is how that retry stays
-    surgical. Re-planning the whole target would drag every position that has
-    since drifted back through the band on a day the strategy never asked to
-    rebalance, turning one halted name into a portfolio-wide trade.
-    """
+    # Sizing against raw prices would value a halted holding at zero, drop NAV by its full
+    # weight, then sell down every *healthy* position to hit its share of the smaller
+    # portfolio — fake loss, fake recovery tomorrow, real costs on a trade nobody wanted.
     nav = portfolio.nav(marks)
     if nav <= 0:
         return TradePlan(deltas=pd.Series(dtype=float))
 
     current = portfolio.weights(marks)
     names = sorted(set(target.index) | set(current.index))
+    # `only` keeps a retry surgical. Re-planning the whole target would drag every position
+    # that has since drifted back through the band on a day the strategy never asked to
+    # rebalance, turning one halted name into a portfolio-wide trade.
     if only is not None:
         names = [t for t in names if t in only]
 
@@ -179,6 +130,9 @@ def plan_trades(
         current_w = float(current.get(ticker, 0.0))
         drift = target_w - current_w
 
+        # A name the strategy dropped is exited regardless of the band: that is a risk
+        # decision, not a rebalancing nicety, and leaving 30bp of a rejected name
+        # accumulates into a portfolio nobody chose.
         is_exit = target_w == 0.0 and current_w != 0.0
         wants_trade = abs(drift) >= no_trade_band or (is_exit and exit_removed)
         if not wants_trade or abs(drift) * nav <= NEGLIGIBLE_NOTIONAL:
@@ -192,6 +146,8 @@ def plan_trades(
             blocked.append(ticker)  # halted, delisted, or not yet listed
             continue
 
+        # Full distance to target, not to the band edge: stopping at the edge leaves the
+        # book permanently at its maximum tolerated error and guarantees another trade soon.
         share_delta = drift * nav / price
         if abs(share_delta) > 1e-9:
             deltas[ticker] = share_delta
@@ -209,23 +165,13 @@ def execute(
     daily_vol: pd.Series,
     costs: CostModel,
 ) -> list[Fill]:
-    """
-    Turn planned share deltas into fills, applying costs and the cash constraint.
+    # Sells settle before buys — how the cash actually becomes available, and what keeps a
+    # fully-invested rebalance off a margin loan it never asked for. Short buying power
+    # scales buys down proportionally rather than dropping some, preserving the shape.
 
-    Sells settle before buys, which is both how the cash actually becomes
-    available and what keeps a fully-invested rebalance from needing a margin
-    loan it never asked for. If buying power still falls short the buys are scaled
-    down proportionally rather than partially dropped, so the portfolio stays close
-    to the intended shape instead of silently over-weighting whichever names
-    sorted first.
-
-    The scaling is measured against the *cost-inclusive* price of the buys, not
-    the raw notional. Measuring it against raw notional is how a long-only
-    backtest quietly ends up on margin: the shortfall is precisely the slippage
-    and commission, so the one thing the check must not ignore is the costs.
-    `_affordable_scale` works out how far the buys have to shrink, without
-    assuming the costs shrink with them.
-    """
+    # Scaling is measured against the *cost-inclusive* price. Measuring against raw notional
+    # is how a long-only backtest ends up on margin: the shortfall is precisely the slippage
+    # and commission, so costs are the one thing the check must not ignore.
     sells = share_deltas[share_deltas < 0]
     buys = share_deltas[share_deltas > 0]
 
@@ -246,23 +192,13 @@ def execute(
 
 def _affordable_scale(buys: pd.Series, prices: pd.Series, adv_notional: pd.Series,
                       daily_vol: pd.Series, costs: CostModel, *, available: float) -> float:
-    """
-    The largest fraction of the planned buys that the cash on hand actually covers.
+    # available/required is only correct when every cost component scales with the trade,
+    # and a *minimum* commission does not. The naive scale reserves less than the smaller
+    # order costs: 100 cash, two shares at 100, a 1.00 minimum fee lands at -0.50.
 
-    Dividing available cash by required cash is only correct when every component
-    of the cost scales with the trade, and a *minimum* commission does not: shrink
-    the order and the fee stays exactly where it was. The naive scale therefore
-    reserves less than the smaller order goes on to cost, and the account finishes
-    overdrawn — with 100 in cash, two shares at 100 and a 1.00 minimum fee, it
-    lands at -0.50. Impact fails the same assumption in the opposite, harmless
-    direction, growing as the square root of size rather than linearly.
-
-    Cash required is monotone non-decreasing in the scale whatever the cost model
-    does in between, so a bisection finds the largest affordable fraction without
-    needing to invert it. Forty halvings resolve the fraction far below a cent on
-    any book this engine will see. A scale of zero — the honest answer when the
-    minimum fees alone exceed the balance — simply places no buys.
-    """
+    # Cash required is monotone non-decreasing in the scale whatever the cost model does
+    # between, so bisection finds the largest affordable fraction without inverting it. A
+    # scale of zero — minimum fees alone exceeding the balance — simply places no buys.
     def required(scale: float) -> float:
         return sum(_cash_required(ticker, qty * scale, prices, adv_notional, daily_vol, costs)
                    for ticker, qty in buys.items())
@@ -282,7 +218,6 @@ def _affordable_scale(buys: pd.Series, prices: pd.Series, adv_notional: pd.Serie
 
 def _cash_required(ticker: str, shares: float, prices: pd.Series, adv_notional: pd.Series,
                    daily_vol: pd.Series, costs: CostModel) -> float:
-    """Cash a buy will actually consume: notional at the fill price, plus commission."""
     ref_price = float(prices[ticker])
     notional = abs(shares) * ref_price
     slippage = costs.slippage_rate(notional, float(adv_notional.get(ticker, np.nan)),
@@ -293,7 +228,6 @@ def _cash_required(ticker: str, shares: float, prices: pd.Series, adv_notional: 
 def _book_fill(portfolio: Portfolio, date: pd.Timestamp, ticker: str, shares: float,
                prices: pd.Series, adv_notional: pd.Series, daily_vol: pd.Series,
                costs: CostModel) -> Fill:
-    """Price one trade through the cost model and book it into the portfolio."""
     ref_price = float(prices[ticker])
     notional = abs(shares) * ref_price
     adv = float(adv_notional.get(ticker, np.nan))

@@ -108,11 +108,19 @@ def summarize_relative(strategy_equity: pd.Series, baseline_equity: pd.Series) -
     Statistics of the strategy's returns minus a baseline run on the same universe.
 
     This exists because the absolute Sharpe of anything run on a survivorship-
-    biased universe is uninterpretable: equal-weight buy-and-hold of this
-    project's 82 names scores about 0.91 with no signal in it at all. Differencing
-    against a baseline that inherits the identical bias cancels most of it, which
-    makes the information ratio below the only figure here that is about the
-    strategy rather than about the universe.
+    biased universe is uninterpretable: an equal-weight, daily-rebalanced run over
+    this project's 82 names scores about 0.91 with no signal in it at all. Measuring
+    against a baseline drawn from the same names removes the part of that which both
+    portfolios hold in common, which is what makes the information ratio below the
+    most informative figure here.
+
+    It is not a correction, and the difference matters. Subtracting daily returns
+    removes a *shared* component; survivorship bias is not shared additively, because
+    strategy and baseline hold the same names at different weights and the missing
+    failed names would have changed each one's selection differently. What this
+    reports is active performance measured on a survivor-selected universe. The
+    selection problem is still there afterwards, and only point-in-time data removes
+    it — see `universe.py`.
 
     Both series are reported alongside the difference rather than collapsed into
     one adjusted number. A haircut destroys the audit trail — once one figure has
@@ -162,7 +170,10 @@ def format_relative_summary(relative: dict, baseline_name: str) -> str:
         f"  excess CAGR     {relative['excess_cagr']:>8.2%}",
         f"  tracking error  {relative['tracking_error']:>8.2%}",
         f"  beta            {relative['beta_to_baseline']:>8.2f}",
-        f"  info ratio      {relative['information_ratio']:>8.2f}   <- the bias-cancelling number",
+        # Not "the bias-cancelling number". Differencing removes what the two
+        # portfolios share; it does not establish that survivorship bias is what
+        # was shared. This is active performance on a survivor-selected universe.
+        f"  info ratio      {relative['information_ratio']:>8.2f}   <- active, still survivor-selected",
     ])
 
 

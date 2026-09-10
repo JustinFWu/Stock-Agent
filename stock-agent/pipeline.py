@@ -32,8 +32,14 @@ from src.models.vol_forecast import validate_vol_forecast, train_vol_model
 from src.strategy.weights import EqualWeightStrategy
 
 
-def do_fetch(refetch: bool) -> None:
-    """Pull bars for the whole universe plus the benchmark, skipping what is already current."""
+def do_fetch(refetch: bool) -> list[str]:
+    """
+    Pull bars for the whole universe plus the benchmark, skipping what is current.
+
+    Returns the tickers that failed so the caller can set an exit status. Printing
+    the failures and exiting 0 makes a fetch that downloaded nothing indistinguishable
+    from a successful one to anything automated — a scheduler, a Makefile, CI.
+    """
     tickers = list(UNIVERSE.tickers) + [BENCHMARK]
     print(f"Fetching {len(tickers)} tickers...")
 
@@ -53,6 +59,7 @@ def do_fetch(refetch: bool) -> None:
     print(f"\nFetched {fetched}, already current {skipped}, failed {len(failed)}")
     if failed:
         print(f"Failed tickers: {', '.join(failed)}")
+    return failed
 
 
 def do_vol_validate(n_splits: int, force_rebuild: bool, refetch: bool) -> None:
@@ -79,8 +86,9 @@ def do_backtest(rebalance: str, cost_model: str, band: float, start: str | None)
     Run the Phase 2 backtester over cached bars.
 
     The baseline run is not optional, and that is the point. On a survivorship-
-    biased universe an absolute Sharpe means nothing — equal-weight buy-and-hold
-    of these names scores about 0.91 with no signal in it — so the runner always
+    biased universe an absolute Sharpe means nothing — an equal-weight daily-
+    rebalanced run over these names scores about 0.91 with no signal in it — so
+    the runner always
     computes the same-universe baseline and prints the difference. Enforcement by
     construction beats enforcement by discipline.
 
@@ -96,8 +104,8 @@ def do_backtest(rebalance: str, cost_model: str, band: float, start: str | None)
     panel = load_price_panel(list(UNIVERSE.tickers))
     print(f"  {len(panel.tickers)} tickers, {panel.dates[0].date()} to {panel.dates[-1].date()}")
 
-    settings = dict(universe=UNIVERSE, start=start, rebalance=rebalance,
-                    costs=COST_MODELS[cost_model], no_trade_band=band)
+    settings = {"universe": UNIVERSE, "start": start, "rebalance": rebalance,
+                "costs": COST_MODELS[cost_model], "no_trade_band": band}
 
     print(f"\n[2/3] Backtesting {strategy.name} ({cost_model} costs, {rebalance} rebalance)...")
     result = run_backtest(panel, strategy, **settings)
@@ -141,7 +149,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.fetch:
-        do_fetch(args.refetch)
+        if do_fetch(args.refetch):
+            sys.exit(1)  # a partial download is not a successful one
     elif args.vol_validate:
         do_vol_validate(args.splits, args.rebuild, args.refetch)
     elif args.train_vol:
@@ -149,5 +158,5 @@ if __name__ == "__main__":
     elif args.backtest:
         do_backtest(args.rebalance, args.costs, args.band, args.start)
     else:
+        # `parser.error` prints usage and exits 2 itself; nothing follows it.
         parser.error("choose one of --fetch / --vol-validate / --train-vol / --backtest")
-        sys.exit(2)

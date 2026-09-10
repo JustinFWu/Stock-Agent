@@ -69,6 +69,22 @@ class CostModel:
     # 3% a day, roughly 48% annualized, is deliberately high.
     fallback_daily_vol: float = 0.03
 
+    def __post_init__(self) -> None:
+        """
+        Every rate must be finite and non-negative.
+
+        A negative rate does not merely understate costs, it inverts them: trading
+        becomes a source of return, and the backtest rewards churn precisely where
+        this module exists to penalise it. Zero stays legal — `ZERO_COSTS` is a
+        deliberate measurement of the gross-to-net gap.
+        """
+        for name in ("commission_bps", "commission_per_share", "min_commission",
+                     "half_spread_bps", "impact_coef", "fallback_participation",
+                     "fallback_daily_vol"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative, got {value!r}")
+
     def commission(self, shares: float, notional: float) -> float:
         """Explicit fees on one trade. `shares` and `notional` are absolute values."""
         fee = notional * self.commission_bps / 1e4 + shares * self.commission_per_share

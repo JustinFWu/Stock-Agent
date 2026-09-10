@@ -1,3 +1,12 @@
+# Lower bounds only, so a fresh install picks up fixes. What the suite was last
+# verified against, for when a future version breaks something:
+#
+#   Python 3.13.1 / 3.12 in CI
+#   pandas 3.0.3   numpy 2.4.6      scikit-learn 1.8.0   xgboost 3.2.0
+#   yfinance 1.3.0 pyarrow 24.0.0   joblib 1.5.3
+#
+# `ruff` is not listed: CI installs it separately and it is not a runtime dependency.
+
 yfinance>=0.2.36
 pandas>=2.0.0
 numpy>=1.26.0

@@ -51,6 +51,11 @@ class PricePanel:
     lows: pd.DataFrame
     closes: pd.DataFrame
     volumes: pd.DataFrame
+    # Requested tickers that had no cached bars. Carried on the panel rather than
+    # printed and forgotten: a backtest run on 74 of 82 names is a different
+    # experiment from one run on all 82, and the result should say so without
+    # anyone having to go back and read the console.
+    missing: tuple[str, ...] = ()
 
     @property
     def dates(self) -> pd.DatetimeIndex:
@@ -70,12 +75,6 @@ class PricePanel:
         """
         date = pd.Timestamp(date)
         return self._map(lambda frame: frame.loc[:date])
-
-    def slice_dates(self, start=None, end=None) -> "PricePanel":
-        """Restrict to a date window, for running a backtest over part of history."""
-        start = pd.Timestamp(start) if start is not None else None
-        end = pd.Timestamp(end) if end is not None else None
-        return self._map(lambda frame: frame.loc[start:end])
 
     def tradable_as_of(self, date, min_history: int = 0) -> list[str]:
         """
@@ -114,6 +113,7 @@ class PricePanel:
             lows=transform(self.lows),
             closes=transform(self.closes),
             volumes=transform(self.volumes),
+            missing=self.missing,
         )
 
 
@@ -158,4 +158,5 @@ def load_price_panel(tickers: list[str]) -> PricePanel:
         lows=frames["Low"],
         closes=frames["Close"],
         volumes=frames["Volume"],
+        missing=tuple(missing),
     )

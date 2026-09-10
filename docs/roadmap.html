@@ -681,7 +681,8 @@
             <dt>Why here</dt>
             <dd>Evaluable standalone &mdash; scored on forecast error, no backtester required. It is also the one prediction problem in this domain that is actually winnable.</dd>
             <dt>Reuse</dt>
-            <dd><code>train.py</code> keeps <code>_build_model</code> and <code>_walk_forward_folds</code> essentially unchanged. The label swap is most of the work.</dd>
+            <dd><code>train.py</code> keeps <code>_build_model</code> and <code>_walk_forward_folds</code> essentially unchanged. The label swap is most of the work.
+            <br><small>As built: this became <code>src/models/vol_forecast.py</code>. The fold helper is now <code>_date_windows</code> plus <code>split_frames</code>, split apart so the label-overlap purge could be tested on its own.</small></dd>
           </dl>
           <div class="gate-line">
             <b>Result &mdash; pass</b> XGBoost beat EWMA and HAR-RV on both metrics, winning QLIKE
@@ -831,7 +832,10 @@
       <p>
         Worth recording because the correction is now load-bearing in production: it is saved
         inside the model artifact and applied by <code>predict_vol</code>. Loading the
-        estimator and calling it directly would quietly size every position about 9% light.
+        estimator and calling it directly would leave every forecast about 9% low &mdash; and
+        since sizing is inverse to forecast volatility, an under-forecast reads as a calmer
+        market and takes roughly 10% <em>more</em> exposure per name than intended, before the
+        per-name cap binds. The forecast is biased low; the position is biased large.
       </p>
     </div>
   </section>
@@ -859,7 +863,7 @@
             <td>Backtest and live weights from one code path</td>
             <td class="num">byte-identical</td>
             <td>Blocking &mdash; fix before proceeding</td>
-            <td><span class="tag retool">Pending</span></td>
+            <td><span class="tag keep">Cleared</span></td>
           </tr>
           <tr>
             <td class="num">3</td>
@@ -915,8 +919,8 @@
           </tr>
           <tr>
             <td><span class="tag retool">Retool</span></td>
-            <td class="path">train.py</td>
-            <td><code>_build_model</code> and <code>_walk_forward_folds</code> serve vol forecasting after a label swap.</td>
+            <td class="path">train.py &rarr; models/vol_forecast.py</td>
+            <td><code>_build_model</code> and <code>_walk_forward_folds</code> serve vol forecasting after a label swap. Renamed on the way in; the fold helper split into <code>_date_windows</code> and <code>split_frames</code>.</td>
           </tr>
           <tr>
             <td><span class="tag retool">Retool</span></td>

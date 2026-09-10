@@ -46,6 +46,16 @@ MAX_WEIGHT = 0.10        # per-name cap
 MAX_GROSS = 1.0          # long-only, no leverage
 NO_TRADE_BAND = 0.005    # ignore drift smaller than 50bp of NAV
 
+# Live-run data guards.
+#
+# `fetcher.is_current` deliberately answers only "was this file fetched for the
+# window I want", not "is it recent". Something has to answer the second question
+# before weights become orders, and these are what it answers with. Without them a
+# cache from last March produces confident, entirely stale live weights forever,
+# and a routine `--fetch` skips it because the window still matches.
+MAX_LIVE_STALENESS_DAYS = 4   # a Friday close is still fresh the following Tuesday
+MIN_LIVE_COVERAGE = 0.8       # fraction of the universe that must have a bar that session
+
 # API keys (set via environment variables)
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")

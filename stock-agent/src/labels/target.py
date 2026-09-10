@@ -8,6 +8,11 @@ Forward-looking labels.
                       volatility over the next FORWARD_DAYS.
 
 Both leave the last FORWARD_DAYS rows NaN, since their future has not happened yet.
+
+`add_forward_vol` also records `label_end`: the date each label's window actually
+closes on. That is data, not decoration — a walk-forward split has to drop training
+rows whose outcome is measured inside the test block, and only the row itself knows
+when its window ends. See the note there.
 """
 
 import sys
@@ -51,6 +56,17 @@ def add_forward_vol(df: pd.DataFrame, horizon: int = FORWARD_DAYS) -> pd.DataFra
     forward_vol = np.sqrt(forward_var * TRADING_DAYS)
 
     df["forward_vol"] = forward_vol.where(forward_vol > 0)
+
+    # The date this label's window actually closes on, carried with the row.
+    #
+    # A pooled walk-forward split must purge training rows whose outcome reaches
+    # into the test block, and counting calendar dates gets that wrong for any
+    # ticker with missing sessions: the label looks ahead `horizon` *observed
+    # bars* of this ticker, which for a name with a gap can be weeks past the
+    # `horizon`-th date on the pooled calendar. Such a row survives a date-counted
+    # embargo while its label is measured from inside the evaluation period, and
+    # the model trains on the answer it is about to be graded on.
+    df["label_end"] = df.index.to_series().shift(-horizon)
     return df
 
 

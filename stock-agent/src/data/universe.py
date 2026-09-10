@@ -1,17 +1,24 @@
 """
 Stock universe: which names exist, when, and what is wrong with that answer.
 
-The universe is 82 of today's US large caps grouped by sector ETF. The sector map
-also gives the risk layer the grouping it needs for per-sector exposure limits.
+The universe is 82 of today's US large caps grouped by sector ETF.
+
+Only the *keys* of `SECTOR_MAP` are read today — they are the ticker list. The
+sector values are carried but unused: the risk layer that would apply per-sector
+exposure limits does not exist yet. That is stated here rather than left to be
+discovered, because a mapping that looks live and is not is worse than no mapping
+at all — it invites the assumption that sector concentration is already bounded.
+It is not. Nothing in this repo currently limits how much of the book sits in one
+sector.
 
 Survivorship, stated with a number rather than an adjective. These are the names
 that are large caps *now*. Companies that were in the index between 2005 and 2026
 and then failed, were acquired, or simply fell out are absent, and the strategies
 that would have held them cannot be penalised for it. Measured against RSP — the
 equal-weight S&P 500 ETF, which holds the weighting scheme constant and varies
-only whether constituents were chosen with hindsight — equal-weight buy-and-hold
-of this universe returned 16.8%/yr at Sharpe 0.91 with a -47% drawdown, against
-10.1%/yr, Sharpe 0.58 and -60% for RSP over the same window. About 6.7pp of
+only whether constituents were chosen with hindsight — an equal-weight, daily-
+rebalanced run over this universe returned 16.8%/yr at Sharpe 0.91 with a -47%
+drawdown, against 10.1%/yr, Sharpe 0.58 and -60% for RSP over the same window. About 6.7pp of
 annual return and 0.33 of Sharpe are available here for free, before any signal.
 Eisdorfer (JFM 2008) puts roughly 40% of momentum's measured profit in delisting
 returns specifically, which is exactly the part this universe cannot see.
@@ -19,8 +26,11 @@ returns specifically, which is exactly the part this universe cannot see.
 The consequence is not "discount the result a little". It is that any *absolute*
 performance figure from this universe is uninterpretable. Only differences
 against a baseline run on the same universe mean anything, because the bias
-appears in both and largely cancels. That is why `metrics.relative_summary`
-exists and why the backtest runner always computes a baseline.
+appears in both. That is why `metrics.summarize_relative` exists and why the
+backtest runner always computes a baseline. Note the limit of that: differencing
+removes what the two portfolios *share*, which is not the same as removing the
+selection bias, since the failed names would have changed each portfolio's
+holdings differently. It narrows the question; it does not settle it.
 
 Fixing this properly needs point-in-time constituent data and delisted price
 histories — Norgate, Sharadar and EODHD all sell it; yfinance cannot supply it
@@ -37,15 +47,20 @@ BENCHMARK = "SPY"
 
 SURVIVORSHIP_CAVEAT = (
     "Universe 'survivor-82' is today's large caps: names that failed, were acquired, "
-    "or fell out of the index between 2005 and 2026 are absent. Measured, equal-weight "
-    "buy-and-hold of this universe returns 16.8%/yr at Sharpe 0.91 and -47% max "
+    "or fell out of the index between 2005 and 2026 are absent. Measured, an equal-weight "
+    "daily-rebalanced run over this universe returns 16.8%/yr at Sharpe 0.91 and -47% max "
     "drawdown, against 10.1%/yr, Sharpe 0.58 and -60% for RSP (point-in-time "
-    "equal-weight S&P 500). Roughly 6.7pp/yr and 0.33 of Sharpe here is universe "
-    "selection, not strategy. Absolute figures from this universe are uninterpretable; "
-    "only differences against a baseline run on the same universe are."
+    "equal-weight S&P 500). That ~6.7pp/yr and 0.33 of Sharpe indicates the scale of "
+    "the advantage this universe confers, but it is not an isolated measurement of "
+    "survivorship: the two portfolios differ in composition and rebalancing as well as "
+    "in hindsight. Absolute figures from this universe are uninterpretable; a baseline "
+    "run on the same universe removes what both portfolios share, which is narrower "
+    "than removing the selection bias."
 )
 
-# Sector membership, via each name's sector ETF.
+# Sector membership, via each name's sector ETF. The values are inert today —
+# see the module docstring. Kept because the grouping is the slow part to get
+# right and re-deriving it later invites a different, undocumented answer.
 SECTOR_MAP = {
     # Technology
     "AAPL": "XLK", "MSFT": "XLK", "NVDA": "XLK", "GOOG": "XLK", "GOOGL": "XLK",

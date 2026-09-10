@@ -41,7 +41,7 @@ def test_drawdown_is_measured_from_the_peak():
     assert summarize(equity, zeros, zeros)["max_drawdown"] == pytest.approx(-0.5)
 
 
-def test_cost_drag_is_annualised_against_average_nav():
+def test_cost_drag_is_annualised_against_each_days_nav():
     # One extra mark, so the curve spans exactly TRADING_DAYS return periods.
     equity = pd.Series(100.0, index=pd.bdate_range("2020-01-01", periods=TRADING_DAYS + 1))
     costs = pd.Series(0.0, index=equity.index)

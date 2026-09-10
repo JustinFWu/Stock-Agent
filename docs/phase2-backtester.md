@@ -159,13 +159,19 @@ rather than describing it.
 | RSP — equal-weight S&P 500, point-in-time | 10.11% | 20.2% | 0.58 | −59.9% |
 | SPY — cap-weight S&P 500, point-in-time | 10.99% | 18.9% | 0.65 | −55.2% |
 
-RSP is the right control: it holds the weighting scheme constant and varies only
-whether constituents were chosen with hindsight. **The gap is ~6.7pp/yr of CAGR,
-+0.33 of Sharpe, and 13pp of understated drawdown** — available to any long-only
-strategy on this universe for free, before any signal. Part of that is a genuine
-mega-cap tilt over this window, so treat 6.7pp as an upper bound on pure
-survivorship; it is still the correct bound for interpreting a Phase 3 number,
-because momentum draws from exactly this pool.
+RSP is the closest available control: it holds the weighting scheme constant and
+varies mainly whether constituents were chosen with hindsight. **The gap is
+~6.7pp/yr of CAGR, +0.33 of Sharpe, and 13pp of understated drawdown** — available
+to any long-only strategy on this universe for free, before any signal.
+
+Read that as an indication of scale, not as a measurement of survivorship bias.
+The two portfolios differ in constituent count and composition as well as in
+hindsight, and RSP's own rebalancing is not the one this engine runs, so the gap
+contains a genuine mega-cap tilt over this window alongside the selection effect.
+6.7pp is the right order of magnitude for interpreting a Phase 3 number, because
+momentum draws from exactly this pool. It is not an isolated estimate of the bias,
+and nothing here converts it into one. Only point-in-time constituent data does
+that.
 
 Consistent with the literature: Eisdorfer (JFM 2008) attributes roughly **40% of
 momentum profit to delisting returns** specifically — the part this universe
@@ -324,6 +330,14 @@ been placed.
 
 *Fix:* `plan_trades` takes raw prices (tradability) and marks (valuation)
 separately. Engine supplies `open_marks = opens.combine_first(marks)`.
+
+*Amended, review of 2026-09-05:* that fallback was itself look-ahead. `marks` is
+`closes.ffill()`, which includes **today's** close — not knowable at today's open.
+A halted name's evening price therefore set the NAV every other name was sized
+against, so changing one name's close on the execution day moved another name's
+morning order from nothing to a 125-share sale. The fallback is now
+`marks.shift(1)`: the last close from a session strictly before the one being
+traded. Regression in `tests/test_engine_execution.py`.
 
 ### A sixth, found while fixing #1
 

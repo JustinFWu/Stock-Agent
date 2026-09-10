@@ -10,7 +10,16 @@ Two things here are load-bearing for everything downstream:
   * A fetch manifest. Bars are cached by ticker, so a change to HISTORY_START would
     otherwise be silently ignored and the model would train on whatever window
     happened to be on disk. The manifest records the window each file was fetched
-    with and forces a refetch when it no longer matches.
+    with and forces a refetch when it no longer matches. It is also what
+    `dataset._fingerprint` hashes, so replacing the bars invalidates every frame
+    derived from them.
+
+Writes go through `storage.atomic_path`: an interrupted fetch must not leave a
+truncated parquet where the next run expects twenty years of bars. What that does
+*not* fix is two processes fetching at once — the manifest is a read-modify-write
+with no lock, so overlapping fetchers can still drop each other's entries. Fetching
+is a single foreground command today, so this is a documented limit rather than a
+solved problem.
 """
 
 import json
@@ -23,6 +32,7 @@ import yfinance as yf
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import RAW_DIR, HISTORY_START, DEFAULT_INTERVAL
+from src.storage import atomic_path
 
 MANIFEST_PATH = RAW_DIR / "_manifest.json"
 
@@ -44,8 +54,19 @@ def _load_manifest() -> dict:
 
 
 def _save_manifest(manifest: dict) -> None:
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    with atomic_path(MANIFEST_PATH) as tmp:
+        tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def manifest_entry(ticker: str) -> dict:
+    """
+    What the manifest records about a ticker's cached bars, or {} if it has none.
+
+    Public because the derived-feature cache fingerprints it: a frame built from a
+    particular download must stop being trusted the moment that download is replaced,
+    and `fetched_at` is what makes that visible.
+    """
+    return _load_manifest().get(ticker.upper(), {})
 
 
 def _download(ticker: str, start: str, interval: str) -> pd.DataFrame:
@@ -80,7 +101,8 @@ def fetch_and_save(ticker: str, start: str = HISTORY_START,
     df = df[~df.index.duplicated(keep="last")].sort_index()
 
     path = RAW_DIR / f"{ticker}.parquet"
-    df.to_parquet(path)
+    with atomic_path(path) as tmp:
+        df.to_parquet(tmp)
 
     manifest = _load_manifest()
     manifest[ticker] = {

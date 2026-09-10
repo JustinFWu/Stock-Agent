@@ -27,7 +27,7 @@ Only audit source the user actually authored.
 ### 1. Unnecessary comments
 The test is "what vs why." **Keep** comments that explain *why* — non-obvious intent,
 trade-offs, gotchas, leakage/look-ahead reasoning, units. This repo has good ones (e.g. the
-no-look-ahead notes in `pipeline.py`, the atomic-write rationale in `news/sentiment.py`) —
+no-look-ahead notes in `backtest/engine.py`, the atomic-write rationale in `storage.py`) —
 do not flag those.
 
 **Flag** comments that add no information:

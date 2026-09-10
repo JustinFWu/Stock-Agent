@@ -1,0 +1,39 @@
+# Lint configuration, pinned rather than left to ruff's defaults.
+#
+# CI installs the latest ruff, and ruff's default rule set grows between releases.
+# Without an explicit selection, a green branch turns red because a linter shipped
+# a new opinion — which trains everyone to ignore the lint step. The rules below
+# are chosen once, here, and change only on purpose.
+
+line-length = 100
+
+[lint]
+select = [
+    "E4", "E7", "E9",  # pycodestyle: real errors, not whitespace preferences
+    "F",               # pyflakes: undefined names, unused imports, dead bindings
+    "B",               # bugbear: mutable defaults, blind asserts, loop-variable capture
+    "C4",              # comprehensions: unnecessary intermediate collections
+    "SIM",             # obvious simplifications
+]
+
+# Deliberately not selected, with reasons — so the next person does not "fix" the
+# config by turning them on and then silencing the results file by file.
+#
+#   I    (import sorting)  Every module bootstraps its own import path with a
+#                          `sys.path.append` between the third-party and local
+#                          blocks, so no sorting satisfies it. The right fix is to
+#                          package the project properly; until then this rule can
+#                          only be satisfied by breaking the imports.
+#   BLE  (blind except)    Two blind excepts exist on purpose: the fetch loop keeps
+#                          going when one ticker of ninety fails, and the manifest
+#                          reader treats any unreadable file as "stale". Both are
+#                          commented where they sit.
+#   ISC  (implicit concat) Long disclosure strings are built by adjacent literals
+#                          across lines throughout, which is the readable form here.
+
+[lint.per-file-ignores]
+# Both of these are the `sys.path` bootstrap again: local imports cannot come before
+# the line that makes them importable. `pipeline.py` has the same shape for a second
+# reason — `load_dotenv()` has to run before `config` reads the environment.
+"stock-agent/tests/*" = ["E402"]
+"stock-agent/pipeline.py" = ["E402"]

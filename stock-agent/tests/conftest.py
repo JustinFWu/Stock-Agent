@@ -70,3 +70,31 @@ def late_lister_panel() -> PricePanel:
     prices = pd.DataFrame(100.0, index=dates, columns=["OLD", "NEW"])
     prices.loc[prices.index[:300], "NEW"] = np.nan
     return make_panel(prices)
+
+
+def make_bars(periods: int = 500, seed: int = 0, start: str = "2020-01-01") -> pd.DataFrame:
+    """
+    One ticker's synthetic OHLCV bars, shaped like a real bar rather than noise.
+
+    The high is at or above both the open and the close and the low at or below
+    both, because several estimators here take log(High/Low) and log(Close/Open)
+    and would happily return a plausible number from an impossible bar. A seeded
+    generator keeps every derived assertion exact rather than approximate.
+    """
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range(start, periods=periods)
+
+    steps = rng.normal(0.0003, 0.012, periods)
+    close = 100.0 * np.exp(np.cumsum(steps))
+    open_ = close * np.exp(rng.normal(0.0, 0.004, periods))
+
+    body_high = np.maximum(open_, close)
+    body_low = np.minimum(open_, close)
+    high = body_high * (1.0 + np.abs(rng.normal(0.0, 0.003, periods)))
+    low = body_low * (1.0 - np.abs(rng.normal(0.0, 0.003, periods)))
+
+    return pd.DataFrame(
+        {"Open": open_, "High": high, "Low": low, "Close": close,
+         "Volume": rng.integers(1_000_000, 5_000_000, periods).astype(float)},
+        index=dates,
+    )

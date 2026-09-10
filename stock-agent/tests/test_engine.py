@@ -27,8 +27,8 @@ TEST_UNIVERSE = UniverseSpec(id="synthetic", tickers=("AAA", "BBB", "CCC"),
 
 def run(panel, universe=TEST_UNIVERSE, **kwargs):
     """Backtest with the test defaults: short history requirement, no costs unless asked."""
-    settings = dict(universe=universe, costs=ZERO_COSTS, min_history=5,
-                    max_weight=1.0, rebalance="M")
+    settings = {"universe": universe, "costs": ZERO_COSTS, "min_history": 5,
+                "max_weight": 1.0, "rebalance": "M"}
     settings.update(kwargs)
     return run_backtest(panel, EqualWeightStrategy(), **settings)
 
@@ -83,14 +83,20 @@ def test_cash_and_positions_reconcile(drifting_panel):
 
     cash = result.meta["initial_cash"]
     shares: dict[str, float] = {}
-    for _, fill in fills.iterrows():
-        cash -= fill["shares"] * fill["fill_price"] + fill["commission"]
-        shares[fill["ticker"]] = shares.get(fill["ticker"], 0.0) + fill["shares"]
+    fills_by_date = dict(list(fills.groupby("date")))
+    marks = drifting_panel.closes.ffill()
 
-    last_date = result.equity.index[-1]
-    marks = drifting_panel.closes.loc[last_date]
-    rebuilt = cash + sum(qty * marks[t] for t, qty in shares.items())
-    assert rebuilt == pytest.approx(result.equity.iloc[-1], rel=1e-9)
+    # Replayed day by day, not just at the end. A single closing check passes even
+    # if the curve was wrong for years and happened to come back — which is exactly
+    # the shape an accounting bug takes.
+    for date in result.equity.index:
+        for _, fill in fills_by_date.get(date, fills.iloc[:0]).iterrows():
+            cash -= fill["shares"] * fill["fill_price"] + fill["commission"]
+            shares[fill["ticker"]] = shares.get(fill["ticker"], 0.0) + fill["shares"]
+
+        rebuilt = cash + sum(qty * marks.loc[date, t] for t, qty in shares.items())
+        assert rebuilt == pytest.approx(result.equity.loc[date], rel=1e-9), \
+            f"NAV and the fill log disagree on {date.date()}"
 
 
 def test_gross_exposure_never_exceeds_the_ceiling(drifting_panel):
@@ -150,9 +156,9 @@ def test_plan_trades_exits_a_dropped_name_through_the_band():
     """
     portfolio = Portfolio(cash=0.0, shares={"AAA": 1.0})
     prices = pd.Series({"AAA": 100.0, "BBB": 100.0})
-    trades = plan_trades(pd.Series(dtype=float), portfolio, prices, prices,
-                         no_trade_band=0.99)
-    assert trades["AAA"] == pytest.approx(-1.0)
+    plan = plan_trades(pd.Series(dtype=float), portfolio, prices, prices,
+                       no_trade_band=0.99)
+    assert plan.deltas["AAA"] == pytest.approx(-1.0)
 
 
 def test_buys_are_scaled_to_available_cash():
@@ -176,14 +182,53 @@ def test_buys_are_scaled_to_available_cash():
     assert portfolio.shares["AAA"] < 50.0
 
 
-def test_untradeable_names_are_skipped():
-    """A name with no bar on the day cannot be traded, whatever the target says."""
+def test_untradeable_names_are_reported_not_silently_dropped():
+    """
+    A name with no bar cannot be traded — but it must be *reported* as untraded.
+
+    Omitting it leaves the caller unable to tell a trade nobody wanted from a
+    trade that could not be placed, and only the second one should be retried.
+    """
     portfolio = Portfolio(cash=10_000.0)
     prices = pd.Series({"OLD": 100.0, "NEW": np.nan})
-    trades = plan_trades(pd.Series({"OLD": 0.5, "NEW": 0.5}), portfolio, prices, prices,
-                         no_trade_band=0.0)
-    assert "NEW" not in trades.index
-    assert "OLD" in trades.index
+    plan = plan_trades(pd.Series({"OLD": 0.5, "NEW": 0.5}), portfolio, prices, prices,
+                       no_trade_band=0.0)
+    assert "NEW" not in plan.deltas.index
+    assert "OLD" in plan.deltas.index
+    assert plan.blocked == ("NEW",)
+
+
+def test_a_name_nobody_wanted_to_trade_is_not_blocked():
+    """
+    Only a *wanted* trade counts as blocked.
+
+    A name already sitting on its target has nothing owed on it. Reporting it as
+    blocked would make the engine defer a trade that does not exist, and keep
+    deferring it every session for the rest of the rebalance period.
+    """
+    portfolio = Portfolio(cash=0.0, shares={"AAA": 100.0, "BBB": 100.0})
+    tradable = pd.Series({"AAA": 100.0, "BBB": np.nan})
+    marks = pd.Series({"AAA": 100.0, "BBB": 100.0})
+
+    plan = plan_trades(pd.Series({"AAA": 0.5, "BBB": 0.5}), portfolio, tradable, marks,
+                       no_trade_band=0.0)
+    assert plan.deltas.empty
+    assert plan.blocked == ()
+
+
+def test_only_restricts_the_plan_to_the_named_subset():
+    """
+    The deferred retry must not re-plan the whole book.
+
+    Replanning everything would exit every held name absent from the restricted
+    view and rebalance the rest on a day the strategy never asked to trade.
+    """
+    portfolio = Portfolio(cash=0.0, shares={"AAA": 100.0, "BBB": 100.0})
+    prices = pd.Series({"AAA": 100.0, "BBB": 100.0})
+
+    plan = plan_trades(pd.Series({"AAA": 1.0}), portfolio, prices, prices,
+                       no_trade_band=0.0, only=frozenset({"AAA"}))
+    assert list(plan.deltas.index) == ["AAA"], "BBB was not in scope and must be untouched"
 
 
 def test_a_halted_name_does_not_shrink_nav():
@@ -199,9 +244,9 @@ def test_a_halted_name_does_not_shrink_nav():
     tradable = pd.Series({"AAA": 100.0, "BBB": np.nan})   # BBB halted: no execution price
     marks = pd.Series({"AAA": 100.0, "BBB": 100.0})       # but still worth its last close
 
-    trades = plan_trades(pd.Series({"AAA": 0.5, "BBB": 0.5}), portfolio, tradable, marks,
-                         no_trade_band=0.0)
-    assert trades.empty, "already at target — the halted name should not trigger a sell"
+    plan = plan_trades(pd.Series({"AAA": 0.5, "BBB": 0.5}), portfolio, tradable, marks,
+                       no_trade_band=0.0)
+    assert plan.deltas.empty, "already at target — the halted name should not trigger a sell"
 
 
 def test_no_rebalance_in_the_window_is_flagged(flat_panel):

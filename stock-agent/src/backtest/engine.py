@@ -10,7 +10,9 @@ The daily sequence, and the reason for each step:
   1. Execute yesterday's decision at today's OPEN. Decisions are made after a
      close and filled at the next open, so a signal can never be traded at a
      price that was used to compute it. This single day of separation is the
-     difference between a backtest and a fantasy.
+     difference between a backtest and a fantasy. A name with no bar that
+     morning is not dropped — the trade is carried to the next session, and the
+     result reports how many sessions that happened on.
   2. Mark to market at today's CLOSE. NAV, weights, drift.
   3. If today is a rebalance date, form target weights from data through today's
      close and hold them for tomorrow's open.
@@ -135,12 +137,22 @@ def run_backtest(
     volatility targeting will hold a lot of cash, so it is worth setting
     deliberately rather than leaving at the default and forgetting.
     """
+    _check_run_limits(initial_cash, no_trade_band, max_weight, max_gross)
+
     marks = panel.closes.ffill()
     # Valuation prices for the moment of execution: the day's open where there is
-    # one, otherwise the last known close. A holding with no bar today still has a
-    # value, and sizing the rest of the book against a NAV that has silently
-    # dropped it would sell down every healthy position for no reason.
-    open_marks = panel.opens.combine_first(marks)
+    # one, otherwise the last close from a session strictly *before* today. A
+    # holding with no bar today still has a value, and sizing the rest of the book
+    # against a NAV that has silently dropped it would sell down every healthy
+    # position for no reason.
+    #
+    # The fallback is shifted by a session, and that shift is the whole point.
+    # Today's close is not knowable at today's open, so falling back to it lets a
+    # halted name's *evening* price set the size of this morning's trades in every
+    # other name, through NAV. Measured: with one name's open missing, changing
+    # only that name's close on the same day turned another name's morning order
+    # from nothing into a 125-share sale. Look-ahead that reaches the whole book.
+    open_marks = panel.opens.combine_first(marks.shift(1))
     adv_notional = (panel.closes * panel.volumes).rolling(ADV_WINDOW).mean().shift(1)
     daily_vol = (np.log(panel.closes / panel.closes.shift(1))
                  .rolling(VOL_WINDOW).std().shift(1))
@@ -152,9 +164,15 @@ def run_backtest(
 
     portfolio = Portfolio(cash=initial_cash)
     pending: pd.Series | None = None
+    # Names a previous session meant to trade but found no price for. While this is
+    # set, the pending target is retried for these names only: the rest of the book
+    # already reached it, and re-planning everything would drag every drifting
+    # position through the band on a day the strategy never asked to rebalance.
+    owed: frozenset[str] | None = None
     daily_cash_rate = cash_annual_rate / TRADING_DAYS
 
     daily_rows, target_history, oversized_fills = [], {}, 0
+    deferred_sessions = 0
 
     for i, date in enumerate(dates):
         portfolio.cash *= 1.0 + daily_cash_rate
@@ -162,9 +180,9 @@ def run_backtest(
         traded_notional, costs_paid = 0.0, 0.0
         if pending is not None:
             open_prices = panel.opens.loc[date]
-            deltas = plan_trades(pending, portfolio, open_prices, open_marks.loc[date],
-                                 no_trade_band=no_trade_band)
-            fills = execute(portfolio, date, deltas, open_prices,
+            plan = plan_trades(pending, portfolio, open_prices, open_marks.loc[date],
+                               no_trade_band=no_trade_band, only=owed)
+            fills = execute(portfolio, date, plan.deltas, open_prices,
                             adv_notional.loc[date], daily_vol.loc[date], costs)
             traded_notional = sum(f.notional for f in fills)
             costs_paid = sum(f.total_cost for f in fills)
@@ -172,7 +190,15 @@ def run_backtest(
             # fallback participation, and an unknown-size trade is the clearest
             # case of a cost estimate that should not pass as a measurement.
             oversized_fills += sum(f.participation >= MAX_CREDIBLE_PARTICIPATION for f in fills)
-            pending = None
+
+            # A name with no bar this morning is a trade that has not happened yet,
+            # not one that was cancelled. Holding the target open for exactly those
+            # names retries it at the next open; the next rebalance supersedes it.
+            if plan.blocked:
+                owed = frozenset(plan.blocked)
+                deferred_sessions += 1
+            else:
+                pending, owed = None, None
 
         close_marks = marks.loc[date]
         nav = portfolio.nav(close_marks)
@@ -191,6 +217,7 @@ def run_backtest(
             pending = target_weights(date, panel, strategy, universe=universe,
                                      min_history=min_history, max_weight=max_weight,
                                      max_gross=max_gross)
+            owed = None
             target_history[date] = pending
 
     daily = pd.DataFrame(daily_rows).set_index("date")
@@ -206,6 +233,15 @@ def run_backtest(
         all_caveats.append(
             f"No rebalance occurred: the window holds no {rebalance} period boundary "
             "before its final day, so nothing was ever traded and these figures are empty")
+    if panel.missing:
+        all_caveats.append(
+            f"{len(panel.missing)} requested names had no cached bars and were excluded "
+            f"({', '.join(panel.missing)}) — this ran on a smaller universe than the one named")
+    if deferred_sessions:
+        all_caveats.append(
+            f"{deferred_sessions} sessions carried an unfilled trade to the next open — "
+            "the name had no bar to trade at (a halt, a delisting or a data gap), so the "
+            "book sat off its target for those days")
     if daily["cash"].min() < 0:
         all_caveats.append(
             f"Cash went negative (low: {daily['cash'].min():,.0f}) — the run used unpriced "
@@ -235,6 +271,25 @@ def run_backtest(
         },
         caveats=all_caveats,
     )
+
+
+def _check_run_limits(initial_cash: float, no_trade_band: float,
+                      max_weight: float, max_gross: float) -> None:
+    """
+    Reject settings that would make the run meaningless before it produces numbers.
+
+    A NaN limit is the one worth spelling out: every comparison against it is False,
+    so it does not error, it just switches the constraint off and returns a plausible
+    equity curve computed without the ceiling anyone thought was applied.
+    """
+    for name, value in (("initial_cash", initial_cash), ("no_trade_band", no_trade_band),
+                        ("max_weight", max_weight), ("max_gross", max_gross)):
+        if not np.isfinite(value):
+            raise ValueError(f"{name} must be a finite number, got {value!r}")
+    if initial_cash <= 0:
+        raise ValueError(f"initial_cash must be positive, got {initial_cash}")
+    if no_trade_band < 0:
+        raise ValueError(f"no_trade_band must not be negative, got {no_trade_band}")
 
 
 def _tradable_count(panel: PricePanel, date: pd.Timestamp, min_history: int) -> int:

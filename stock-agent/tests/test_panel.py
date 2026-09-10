@@ -6,6 +6,7 @@ so these tests are blunt about it: after truncation the future bars must not
 merely be ignored, they must be absent.
 """
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -66,5 +67,12 @@ def test_universe_membership_is_a_no_op_but_honest():
 
 
 def test_universe_spec_is_immutable():
-    with pytest.raises(Exception):
+    """
+    Frozen for a reason: the caveats travel on this object into every result.
+
+    Named exactly rather than caught as a bare `Exception` — a blind assert here
+    would also pass if the attribute name were misspelled and raised AttributeError,
+    which is the opposite of what this checks.
+    """
+    with pytest.raises(dataclasses.FrozenInstanceError):
         UNIVERSE.point_in_time = True

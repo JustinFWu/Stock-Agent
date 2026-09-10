@@ -47,6 +47,32 @@ class Fill:
         return self.commission + self.spread_cost + self.impact_cost
 
 
+# A drift worth less than this in dollars is not a trade. Zero drift passes the
+# band check when the band is itself zero, and calling that a trade would defer a
+# name with nothing owed on it forever.
+NEGLIGIBLE_NOTIONAL = 1e-9
+
+# Bisection steps used to size buys against available cash. 2^-40 of an order is
+# well below a cent on any realistic book, and the loop is only entered when the
+# full order does not fit.
+AFFORDABILITY_ITERATIONS = 40
+
+
+@dataclass(frozen=True)
+class TradePlan:
+    """
+    What to trade, and what could not be traded.
+
+    `blocked` is the part a bare Series of deltas cannot express: names the plan
+    genuinely wanted to move but found no execution price for. Without it the
+    caller cannot tell "nothing to do here" apart from "this trade did not
+    happen", and those call for opposite responses.
+    """
+
+    deltas: pd.Series
+    blocked: tuple[str, ...] = ()
+
+
 @dataclass
 class Portfolio:
     """Cash plus share counts. Fractional shares are allowed — Alpaca supports them."""
@@ -102,7 +128,8 @@ def plan_trades(
     *,
     no_trade_band: float,
     exit_removed: bool = True,
-) -> pd.Series:
+    only: frozenset[str] | None = None,
+) -> TradePlan:
     """
     Share deltas that move the portfolio toward `target`, subject to the band.
 
@@ -126,33 +153,51 @@ def plan_trades(
     Trades that clear the band go the full distance to target rather than only to
     the band edge. Trading to the edge would leave the portfolio permanently at
     its maximum tolerated error and guarantee another trade shortly after.
+
+    A name the plan wants to move but has no price for is reported in `blocked`
+    rather than quietly omitted. It is the difference between a trade nobody asked
+    for and a trade that could not be placed, and only the caller knows whether to
+    retry it — see the engine, which carries blocked names to the next session.
+
+    `only` restricts the plan to a subset of names, which is how that retry stays
+    surgical. Re-planning the whole target would drag every position that has
+    since drifted back through the band on a day the strategy never asked to
+    rebalance, turning one halted name into a portfolio-wide trade.
     """
     nav = portfolio.nav(marks)
     if nav <= 0:
-        return pd.Series(dtype=float)
+        return TradePlan(deltas=pd.Series(dtype=float))
 
     current = portfolio.weights(marks)
     names = sorted(set(target.index) | set(current.index))
+    if only is not None:
+        names = [t for t in names if t in only]
 
-    deltas = {}
+    deltas, blocked = {}, []
     for ticker in names:
-        price = prices.get(ticker, np.nan)
-        if not np.isfinite(price) or price <= 0:
-            continue  # no bar today: halted, delisted, or not yet listed. Cannot trade it.
-
         target_w = float(target.get(ticker, 0.0))
         current_w = float(current.get(ticker, 0.0))
         drift = target_w - current_w
 
         is_exit = target_w == 0.0 and current_w != 0.0
-        if abs(drift) < no_trade_band and not (is_exit and exit_removed):
+        wants_trade = abs(drift) >= no_trade_band or (is_exit and exit_removed)
+        if not wants_trade or abs(drift) * nav <= NEGLIGIBLE_NOTIONAL:
+            continue
+
+        # Tradability is checked *after* the decision to trade, not before. Checked
+        # first, a halted name lands in the same branch as a name nobody wanted to
+        # touch, and the information that a wanted trade did not happen is gone.
+        price = prices.get(ticker, np.nan)
+        if not np.isfinite(price) or price <= 0:
+            blocked.append(ticker)  # halted, delisted, or not yet listed
             continue
 
         share_delta = drift * nav / price
         if abs(share_delta) > 1e-9:
             deltas[ticker] = share_delta
 
-    return pd.Series(deltas, dtype=float).sort_index()
+    return TradePlan(deltas=pd.Series(deltas, dtype=float).sort_index(),
+                     blocked=tuple(blocked))
 
 
 def execute(
@@ -177,9 +222,9 @@ def execute(
     The scaling is measured against the *cost-inclusive* price of the buys, not
     the raw notional. Measuring it against raw notional is how a long-only
     backtest quietly ends up on margin: the shortfall is precisely the slippage
-    and commission, so the one thing the check must not ignore is the costs. The
-    estimate is conservative by construction — scaling a trade down reduces its
-    market impact, so the realised cost is always at or below the amount reserved.
+    and commission, so the one thing the check must not ignore is the costs.
+    `_affordable_scale` works out how far the buys have to shrink, without
+    assuming the costs shrink with them.
     """
     sells = share_deltas[share_deltas < 0]
     buys = share_deltas[share_deltas > 0]
@@ -188,10 +233,8 @@ def execute(
              for t, q in sells.items()]
 
     if not buys.empty:
-        required = sum(_cash_required(ticker, qty, prices, adv_notional, daily_vol, costs)
-                       for ticker, qty in buys.items())
-        available = max(portfolio.cash, 0.0)
-        scale = min(1.0, available / required) if required > 0 else 0.0
+        scale = _affordable_scale(buys, prices, adv_notional, daily_vol, costs,
+                                  available=max(portfolio.cash, 0.0))
         for ticker, qty in buys.items():
             scaled = qty * scale
             if abs(scaled) > 1e-9:
@@ -199,6 +242,42 @@ def execute(
                                         adv_notional, daily_vol, costs))
 
     return fills
+
+
+def _affordable_scale(buys: pd.Series, prices: pd.Series, adv_notional: pd.Series,
+                      daily_vol: pd.Series, costs: CostModel, *, available: float) -> float:
+    """
+    The largest fraction of the planned buys that the cash on hand actually covers.
+
+    Dividing available cash by required cash is only correct when every component
+    of the cost scales with the trade, and a *minimum* commission does not: shrink
+    the order and the fee stays exactly where it was. The naive scale therefore
+    reserves less than the smaller order goes on to cost, and the account finishes
+    overdrawn — with 100 in cash, two shares at 100 and a 1.00 minimum fee, it
+    lands at -0.50. Impact fails the same assumption in the opposite, harmless
+    direction, growing as the square root of size rather than linearly.
+
+    Cash required is monotone non-decreasing in the scale whatever the cost model
+    does in between, so a bisection finds the largest affordable fraction without
+    needing to invert it. Forty halvings resolve the fraction far below a cent on
+    any book this engine will see. A scale of zero — the honest answer when the
+    minimum fees alone exceed the balance — simply places no buys.
+    """
+    def required(scale: float) -> float:
+        return sum(_cash_required(ticker, qty * scale, prices, adv_notional, daily_vol, costs)
+                   for ticker, qty in buys.items())
+
+    if required(1.0) <= available:
+        return 1.0
+
+    low, high = 0.0, 1.0
+    for _ in range(AFFORDABILITY_ITERATIONS):
+        mid = (low + high) / 2.0
+        if required(mid) <= available:
+            low = mid
+        else:
+            high = mid
+    return low
 
 
 def _cash_required(ticker: str, shares: float, prices: pd.Series, adv_notional: pd.Series,

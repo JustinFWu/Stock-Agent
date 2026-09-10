@@ -1,14 +1,20 @@
 name: CI
 
-# Lightweight checks for a solo repo: catch syntax errors, bad imports,
-# and lint regressions before merging into main. Add a pytest step here
-# once a test suite exists.
+# The test suite runs here, which is the point of the job.
+#
+# This used to lint `stock-agent/src` and stop, with a comment saying to add pytest
+# "once a test suite exists" — long after one did. A green check that only proves the
+# code parses is worse than no check, because it reads like coverage. Lint now covers
+# every authored file, not just `src`, and the suite runs on a clean checkout with no
+# bar cache: the tests that need real market data skip themselves.
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 jobs:
-  lint:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,12 +22,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: stock-agent/requirements.txt
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r stock-agent/requirements.txt
+          pip install ruff
 
-      - name: Lint (ruff)
-        run: ruff check stock-agent/src
+      # Rules are pinned in ruff.toml rather than left to ruff's defaults, which grow
+      # between releases and would otherwise turn a green branch red on their own.
+      - name: Lint
+        run: ruff check stock-agent/src stock-agent/tests stock-agent/config.py stock-agent/pipeline.py
 
-      - name: Byte-compile (syntax check)
-        run: python -m compileall -q stock-agent/src
+      - name: Byte-compile
+        run: python -m compileall -q stock-agent/src stock-agent/tests stock-agent/config.py stock-agent/pipeline.py
+
+      - name: Tests
+        working-directory: stock-agent
+        run: python -m pytest tests -q

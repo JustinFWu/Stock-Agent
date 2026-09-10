@@ -35,8 +35,12 @@ from xgboost import XGBRegressor
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import MODELS_DIR, FORWARD_DAYS
+from src.storage import atomic_path
 
 LABEL_COL = "forward_vol"
+# The date each row's label window closes on. Carried from `labels.target` so the
+# walk-forward purge can ask the row itself rather than counting calendar dates.
+LABEL_END_COL = "label_end"
 
 # Long-horizon returns (126d, 252d) are deliberately absent: they belong to the momentum
 # formation window, carry no volatility information, and their year-long warmup would
@@ -58,10 +62,12 @@ HAR_FEATURES = ["rv_1d", "rv_5d", "rv_21d"]
 
 VOL_MODEL_PATH = MODELS_DIR / "vol_forecast.joblib"
 
-
-def get_available_features(df: pd.DataFrame) -> list[str]:
-    """Return only the vol features present in this frame."""
-    return [c for c in VOL_FEATURES if c in df.columns]
+# Everything a frame must carry to be trainable or scoreable. Stated as one list
+# because a *partial* frame is the dangerous case: narrowing the feature set to
+# whatever happened to be present fits a different model against the same gate,
+# with no error and no record of what changed.
+REQUIRED_COLUMNS = list(dict.fromkeys(
+    VOL_FEATURES + HAR_FEATURES + [LABEL_COL, LABEL_END_COL]))
 
 
 def _build_model() -> XGBRegressor:
@@ -72,7 +78,7 @@ def _build_model() -> XGBRegressor:
                         random_state=42, verbosity=0)
 
 
-def _date_windows(dates, n_splits: int = 5, embargo: int = FORWARD_DAYS):
+def _date_windows(dates, n_splits: int = 5):
     """
     Yield (fold, train_dates, test_dates) for expanding-window splits over the sorted
     unique dates. Time order is never shuffled.
@@ -81,23 +87,51 @@ def _date_windows(dates, n_splits: int = 5, embargo: int = FORWARD_DAYS):
     multi-ticker frame: "train on the past, test on the next block" then holds for every
     ticker at once, even though many rows share each date.
 
-    Embargo: the label at date t is measured from returns through t + FORWARD_DAYS, so
-    the last `embargo` training dates would be labelled with information from inside the
-    test block. Dropping them is what keeps the comparison honest.
+    No embargo is applied here, deliberately. The blocks are handed over whole and the
+    caller purges them against each row's own `label_end`, because a fixed number of
+    calendar dates is the wrong unit for a ragged panel: a label looks ahead `horizon`
+    *observed bars of one ticker*, and for a ticker with missing sessions that lands
+    well past the `horizon`-th pooled date. Such a row clears a date-counted embargo
+    while its label is measured from inside the test block — reproduced on a 20-day
+    calendar, where a ticker seen on days 0-4 and 10-19 kept a training row whose
+    label ended on day 14, four days into the test block.
     """
+    if n_splits < 1:
+        raise ValueError(f"n_splits must be at least 1, got {n_splits}")
+
     dates = np.sort(pd.Index(dates).unique().values)
     fold_size = len(dates) // (n_splits + 1)
     if fold_size == 0:
         return
     for i in range(1, n_splits + 1):
-        train_cutoff = i * fold_size - embargo
-        if train_cutoff <= 0:
+        yield i, dates[:i * fold_size], dates[i * fold_size:(i + 1) * fold_size]
+
+
+def split_frames(clean: pd.DataFrame, n_splits: int = 5):
+    """
+    Yield (fold, train, test) frames, with training rows purged of label overlap.
+
+    Separated from `validate_vol_forecast` because this is where the walk-forward
+    validity actually lives, and a property only observable through a model score is
+    a property nobody checks. The invariant is one line and worth stating: every
+    training row's `label_end` falls strictly before the first date of the test
+    block, so no row is ever fitted on an outcome measured inside the block it is
+    about to be graded on.
+
+    Purging on the row's own label end rather than on a count of calendar dates is
+    the part that matters for a ragged panel — see `_date_windows`.
+    """
+    for fold, train_dates, test_dates in _date_windows(clean.index, n_splits):
+        test = clean[clean.index.isin(test_dates)]
+        if test.empty:
             continue
-        train_dates = dates[:train_cutoff]
-        test_dates = dates[i * fold_size:(i + 1) * fold_size]
-        if len(test_dates) == 0:
+
+        test_start = test.index.min()
+        train = clean[clean.index.isin(train_dates) & (clean[LABEL_END_COL] < test_start)]
+        if train.empty:
             continue
-        yield i, train_dates, test_dates
+
+        yield fold, train, test
 
 
 # --------------------------------------------------------------------------- #
@@ -121,10 +155,11 @@ def _smearing_factor(log_actual: np.ndarray, log_predicted: np.ndarray) -> float
 
     Fitting log(vol) under squared-error loss and exponentiating produces a forecast of
     the conditional MEDIAN, not the mean, and for a right-skewed quantity like
-    volatility the median sits below the mean. Measured here, that under-forecasts by
-    about 9% — which QLIKE, being deliberately asymmetric against under-forecasting,
-    punishes hard. Left uncorrected it makes a log-target model look worse than a
-    direct-variance one for reasons that have nothing to do with forecast skill.
+    volatility the median sits below the mean. Measured here the correction factor is
+    about 1.10, so an uncorrected forecast reads roughly 9% *low* — which QLIKE, being
+    deliberately asymmetric against under-forecasting, punishes hard. Left uncorrected
+    it makes a log-target model look worse than a direct-variance one for reasons that
+    have nothing to do with forecast skill.
 
     The correction is mean(exp(residual)), estimated on TRAINING residuals only so no
     test-block information leaks into the forecast. It is applied identically to HAR
@@ -188,16 +223,52 @@ def _rmse(actual_vol: np.ndarray, forecast_vol: np.ndarray) -> float:
 
 
 def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    """Drop rows without a usable label or complete features, and return the feature list."""
-    feature_cols = get_available_features(df)
-    missing_har = [c for c in HAR_FEATURES if c not in df.columns]
-    if missing_har:
-        raise ValueError(f"HAR baseline needs {missing_har}; build volatility features first.")
+    """
+    Drop rows that cannot be honestly trained or scored on, and return the features.
 
-    needed = list(dict.fromkeys(feature_cols + HAR_FEATURES + [LABEL_COL]))
-    clean = df.dropna(subset=needed)
-    clean = clean[clean[LABEL_COL] > 0]
-    return clean, feature_cols
+    Three checks, because `dropna` on its own passes all three of the values that
+    actually cause trouble here:
+
+      schema      every required column must be present. Silently narrowing the
+                  feature set to whatever the frame happened to carry fits a
+                  different model and compares it against the same gate, with no
+                  error and nothing in the output saying the inputs changed.
+      finiteness  NaN is not the only missing value. An infinity survives `dropna`
+                  and reaches the estimator — `ewma_vol` can produce one off a
+                  zero-variance stretch, and the mandatory EWMA baseline is then
+                  scored against it.
+      positivity  HAR and the log target take logs. A zero realised volatility is a
+                  legitimate reading for a halted week and becomes -inf under the
+                  log, poisoning a fitted coefficient instead of raising.
+
+    Rows removed are counted and printed. A preparation step that quietly discards
+    most of the data looks exactly like one that worked.
+    """
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Frame is missing required columns {missing}. Rebuild the feature cache "
+            "(`pipeline.py --vol-validate --rebuild`) instead of fitting on a subset — "
+            "a narrowed feature set is a different model wearing the same name.")
+
+    feature_cols = list(VOL_FEATURES)
+    numeric = list(dict.fromkeys(feature_cols + HAR_FEATURES + [LABEL_COL]))
+
+    before = len(df)
+    finite = np.isfinite(df[numeric].to_numpy(dtype=float)).all(axis=1)
+    clean = df[finite]
+    non_finite = before - len(clean)
+
+    usable = ((clean[LABEL_COL] > 0)
+              & (clean[HAR_FEATURES] > 0).all(axis=1)
+              & clean[LABEL_END_COL].notna())
+    kept = clean[usable]
+    non_positive = len(clean) - len(kept)
+
+    if before and len(kept) < before:
+        print(f"  prepare: kept {len(kept):,}/{before:,} rows "
+              f"({non_finite:,} non-finite, {non_positive:,} non-positive or unlabelled)")
+    return kept, feature_cols
 
 
 def validate_vol_forecast(df: pd.DataFrame, n_splits: int = 5) -> dict:
@@ -226,12 +297,7 @@ def validate_vol_forecast(df: pd.DataFrame, n_splits: int = 5) -> dict:
     fold_rows = []
     pooled = {name: {"actual": [], "forecast": []} for name in FORECASTERS}
 
-    for fold, train_dates, test_dates in _date_windows(clean.index, n_splits):
-        train = clean[clean.index.isin(train_dates)]
-        test = clean[clean.index.isin(test_dates)]
-        if train.empty or test.empty:
-            continue
-
+    for fold, train, test in split_frames(clean, n_splits):
         actual = test[LABEL_COL].to_numpy()
         row = {
             "fold": fold,
@@ -291,11 +357,17 @@ def _report_gate(summary: dict, n_folds: int) -> dict:
     checks = []
     for baseline in GATE_BASELINES:
         for metric in ("qlike", "rmse"):
-            better = xgb[metric] < summary[baseline][metric]
-            margin = (summary[baseline][metric] - xgb[metric]) / summary[baseline][metric]
+            baseline_score = summary[baseline][metric]
+            better = xgb[metric] < baseline_score
             checks.append(better)
+            # A zero baseline loss is a perfect baseline forecast — unlikely, but a
+            # legitimate result, and there is no percentage improvement over zero to
+            # report. Dividing anyway crashes the gate on a run that should simply
+            # have failed it, so the absolute gap is printed instead.
+            margin = (f"{(baseline_score - xgb[metric]) / baseline_score:+.1%}"
+                      if baseline_score > 0 else f"{baseline_score - xgb[metric]:+.4f} abs")
             print(f"  {'PASS' if better else 'FAIL'}  xgb {metric:<5} {xgb[metric]:.4f} "
-                  f"vs {baseline:<4} {summary[baseline][metric]:.4f}   ({margin:+.1%})")
+                  f"vs {baseline:<4} {baseline_score:.4f}   ({margin})")
 
     passed = all(checks)
     print(f"\n  VERDICT: {'PASS' if passed else 'FAIL'} — "
@@ -338,15 +410,19 @@ def train_vol_model(df: pd.DataFrame, kind: str = "xgb") -> Path:
                    "log_input": True}
 
     # Saved alongside the model so production forecasts carry the same bias correction
-    # validation measured them with. Without it the live sizer would quietly run ~9% low.
+    # validation measured them with. Without it every forecast reads about 9% low, and
+    # an inverse-volatility sizer reading a calmer market than the one it is in takes
+    # roughly 10% *more* exposure per name than intended, before the cap binds.
     payload["smearing"] = _smearing_factor(log_y, model.predict(x))
     payload["log_target"] = True
     payload["horizon"] = FORWARD_DAYS
     payload["trained_rows"] = len(clean)
     payload["trained_through"] = str(clean.index.max().date())
 
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(payload, VOL_MODEL_PATH)
+    # Written through a temporary file: this is the only saved model, and an
+    # interrupted dump over the live path destroys the one that was working.
+    with atomic_path(VOL_MODEL_PATH) as tmp:
+        joblib.dump(payload, tmp)
     print(f"Saved {kind} vol forecaster -> {VOL_MODEL_PATH}  "
           f"({len(clean):,} rows, {len(payload['features'])} features, "
           f"smearing {payload['smearing']:.4f})")
@@ -360,8 +436,26 @@ def predict_vol(payload: dict, df: pd.DataFrame) -> np.ndarray:
     The sizing layer should always come through here rather than calling the estimator
     directly — the log transform and the smearing correction are part of the forecast,
     and applying one without the other silently biases every position size.
+
+    The inputs are checked the way `prepare` checks them at training time, against the
+    feature list stored *in the payload* rather than the module constant. A model has
+    to be scored on the columns it was fitted on: reading the constant instead would
+    silently reorder or extend the matrix the day a feature is added, and the estimator
+    would accept it and return numbers.
     """
-    x = df[payload["features"]]
+    features = list(payload["features"])
+    missing = [c for c in features if c not in df.columns]
+    if missing:
+        raise ValueError(f"Cannot score: frame is missing {missing}, which this model was fitted on.")
+
+    x = df[features]
+    values = x.to_numpy(dtype=float)
+    if not np.isfinite(values).all():
+        raise ValueError("Cannot score: the feature matrix holds NaN or infinity. Filter the "
+                         "rows first — a position size is about to be computed from this.")
     if payload.get("log_input"):
+        if (values <= 0).any():
+            raise ValueError("Cannot score: this model takes logs of its inputs and the frame "
+                             "holds non-positive values.")
         x = np.log(x)
     return np.exp(payload["model"].predict(x)) * payload.get("smearing", 1.0)

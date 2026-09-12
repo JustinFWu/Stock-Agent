@@ -99,3 +99,41 @@ def test_summarize_relative_needs_overlapping_dates():
     late.index = late.index + pd.DateOffset(years=20)
     with pytest.raises(ValueError, match="overlap"):
         summarize_relative(early, late)
+
+
+def noisy_curve(drift: float, seed: int, days: int = TRADING_DAYS * 4) -> pd.Series:
+    # `curve` compounds a constant rate, so its returns have no variance and every Sharpe
+    # off it is NaN by construction. A Sharpe test needs a series that actually moves.
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2020-01-01", periods=days)
+    steps = rng.normal(drift, 0.01, days)
+    return pd.Series(100.0 * np.cumprod(1 + steps), index=dates)
+
+
+def test_both_summaries_report_the_same_sharpe():
+    # One report carried two Sharpe conventions: `summarize` netted the risk-free rate and
+    # `summarize_relative` did not, so the same curve scored 0.97 in one block and 1.14 in
+    # the other. A gate written as "net Sharpe above X" has no defence against that.
+    equity = noisy_curve(0.0004, seed=1)
+    flows = pd.Series(0.0, index=equity.index)
+    rate = 0.02
+
+    absolute = summarize(equity, flows, flows, risk_free_rate=rate)
+    relative = summarize_relative(equity, noisy_curve(0.0002, seed=2), risk_free_rate=rate)
+
+    assert np.isfinite(absolute["sharpe"])
+    assert relative["sharpe_strategy"] == pytest.approx(absolute["sharpe"])
+
+
+def test_the_risk_free_rate_moves_both_summaries_together():
+    equity = noisy_curve(0.0004, seed=1)
+    baseline = noisy_curve(0.0002, seed=2)
+
+    raw = summarize_relative(equity, baseline, risk_free_rate=0.0)
+    netted = summarize_relative(equity, baseline, risk_free_rate=0.05)
+
+    assert netted["sharpe_strategy"] < raw["sharpe_strategy"]
+    assert netted["sharpe_baseline"] < raw["sharpe_baseline"]
+    # The active series is a difference of two return streams, so a rate common to both
+    # cancels: the information ratio must not move when the cash rate does.
+    assert netted["information_ratio"] == pytest.approx(raw["information_ratio"])

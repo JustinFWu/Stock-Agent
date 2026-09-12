@@ -29,7 +29,10 @@ class FixedProposal:
 
 
 def weights_for(panel, proposal: dict, scale: str = "absolute", **kwargs) -> pd.Series:
+    # Sector cap off by default so each test below isolates one constraint; the tests that
+    # exercise it pass their own universe and limit.
     strategy = FixedProposal(proposal, scale)
+    kwargs.setdefault("max_sector_weight", 1.0)
     return target_weights(panel.dates[-1], panel, strategy, universe=UNIVERSE,
                           min_history=5, **kwargs)
 
@@ -108,3 +111,62 @@ def test_weights_are_rounded_and_sorted(flat_panel):
                             universe=UNIVERSE, min_history=5)
     assert list(result.index) == sorted(result.index)
     assert all(w == round(w, 10) for w in result)
+
+
+SECTORED = UniverseSpec(id="sectored", tickers=("AAA", "BBB", "CCC"), point_in_time=True,
+                        caveats=(), sectors={"AAA": "TECH", "BBB": "TECH", "CCC": "UTIL"})
+
+
+def sectored_weights(panel, proposal: dict, **kwargs) -> pd.Series:
+    return target_weights(panel.dates[-1], panel, FixedProposal(proposal), universe=SECTORED,
+                          min_history=5, max_weight=1.0, **kwargs)
+
+
+def test_sector_cap_scales_the_group_down(flat_panel):
+    result = sectored_weights(flat_panel, {"AAA": 0.4, "BBB": 0.2, "CCC": 0.1},
+                              max_sector_weight=0.3)
+
+    assert result[["AAA", "BBB"]].sum() == pytest.approx(0.3)
+    assert result["CCC"] == pytest.approx(0.1)
+
+
+def test_sector_cap_preserves_shape_within_the_group(flat_panel):
+    # A clip would flatten AAA and BBB to the same weight and delete the signal between them.
+    result = sectored_weights(flat_panel, {"AAA": 0.4, "BBB": 0.2, "CCC": 0.1},
+                              max_sector_weight=0.3)
+
+    assert result["AAA"] == pytest.approx(result["BBB"] * 2)
+
+
+def test_sector_cap_leaves_a_compliant_book_alone(flat_panel):
+    result = sectored_weights(flat_panel, {"AAA": 0.1, "BBB": 0.1, "CCC": 0.1},
+                              max_sector_weight=0.3)
+
+    assert result.sum() == pytest.approx(0.3)
+    assert result["AAA"] == pytest.approx(0.1)
+
+
+def test_sector_cap_never_raises_a_name_above_the_per_name_cap(flat_panel):
+    result = target_weights(flat_panel.dates[-1], flat_panel,
+                            FixedProposal({"AAA": 0.5, "BBB": 0.5, "CCC": 0.5}),
+                            universe=SECTORED, min_history=5,
+                            max_weight=0.2, max_sector_weight=0.9)
+
+    assert result.max() <= 0.2 + 1e-12
+
+
+def test_an_unmapped_name_is_its_own_sector(flat_panel):
+    # Not exempt: an unmapped name that escaped the cap would be an unbounded hole in the
+    # limit, and this universe deliberately maps only two of its three names.
+    partial = UniverseSpec(id="partial", tickers=("AAA", "BBB", "CCC"), point_in_time=True,
+                           caveats=(), sectors={"AAA": "TECH", "BBB": "TECH"})
+    result = target_weights(flat_panel.dates[-1], flat_panel,
+                            FixedProposal({"CCC": 0.5}), universe=partial,
+                            min_history=5, max_weight=1.0, max_sector_weight=0.3)
+
+    assert result["CCC"] == pytest.approx(0.3)
+
+
+def test_a_negative_sector_cap_is_refused(flat_panel):
+    with pytest.raises(ValueError, match="max_sector_weight"):
+        sectored_weights(flat_panel, {"AAA": 0.5}, max_sector_weight=-0.1)

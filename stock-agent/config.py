@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 
@@ -29,12 +30,34 @@ FORWARD_DAYS = 5  # forecast horizon: next week's realized volatility
 # form weights under identical constraints — that is the Phase 2 gate. Two copies of
 # "max 10% per name" is how a backtest and production drift apart while both look correct.
 
-# Phase 3 should raise this to ~273: a 12-2 formation window reaches back thirteen months,
-# so a name with exactly 252 bars ranks on a truncated, higher-vol window against the rest.
-MIN_HISTORY_DAYS = 252
+# Formation runs from t-273 to t-21: twelve months of return ending one month back. The skip
+# dodges short-term reversal, and is the whole reason the factor is named 12-2.
+MOMENTUM_LOOKBACK_DAYS = 252
+MOMENTUM_SKIP_DAYS = 21
+MOMENTUM_TOP_FRACTION = 0.10
+
+# Derived, never typed twice: a name that cannot span the formation window would rank on a
+# truncated, higher-vol one against names measured over a full window.
+MIN_HISTORY_DAYS = MOMENTUM_LOOKBACK_DAYS + MOMENTUM_SKIP_DAYS
+
 MAX_WEIGHT = 0.10        # per-name cap
+MAX_SECTOR_WEIGHT = 0.30
 MAX_GROSS = 1.0          # long-only, no leverage
 NO_TRADE_BAND = 0.005    # ignore drift smaller than 50bp of NAV
+
+# A book of fewer than MAX_GROSS/MAX_WEIGHT names cannot reach full investment: the per-name
+# cap truncates it and the leftover reads as a deliberate cash position it never chose.
+# Measured at the decile, that silently held 20% cash and cost momentum 0.19 of information
+# ratio against the same-universe baseline.
+MIN_SELECTED_NAMES = math.ceil(MAX_GROSS / MAX_WEIGHT)
+
+VOL_TARGET_ANNUAL = 0.10
+COV_LOOKBACK_DAYS = 252
+VOL_SCALE_CAP = 1.5
+
+# Idle cash earns something, and vol targeting parks a lot of the book there. A flat rate rather
+# than a fetched bill series: a second data dependency for a second-order effect.
+CASH_ANNUAL_RATE = 0.02
 
 # `fetcher.is_current` answers "was this fetched for the window I want", not "is it
 # recent". Something must answer the second before weights become orders, or a cache from

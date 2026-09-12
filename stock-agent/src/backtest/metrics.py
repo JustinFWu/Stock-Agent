@@ -80,7 +80,8 @@ def _sum_over_nav(flows: pd.Series, equity: pd.Series) -> float:
     return float((aligned["flow"] / aligned["nav"]).sum())
 
 
-def summarize_relative(strategy_equity: pd.Series, baseline_equity: pd.Series) -> dict:
+def summarize_relative(strategy_equity: pd.Series, baseline_equity: pd.Series,
+                       risk_free_rate: float = 0.0) -> dict:
     # The absolute Sharpe of anything on a survivorship-biased universe is uninterpretable:
     # equal-weight over these 82 names scores ~0.91 with no signal in it.
 
@@ -106,9 +107,13 @@ def summarize_relative(strategy_equity: pd.Series, baseline_equity: pd.Series) -
     def _cagr(curve: pd.Series) -> float:
         return float((curve.iloc[-1] / curve.iloc[0]) ** (1 / years) - 1.0) if years > 0 else np.nan
 
+    # Same definition `summarize` uses, risk-free rate included. Two Sharpe conventions in one
+    # report is how a gate written as "net Sharpe above X" gets read off the wrong number: the
+    # excess and raw figures differed by 0.17 on the Phase 3 run, either side of a threshold.
     def _sharpe(returns: pd.Series) -> float:
         sd = float(returns.std(ddof=1))
-        return (float(returns.mean() / sd * np.sqrt(TRADING_DAYS))
+        excess = returns - risk_free_rate / TRADING_DAYS
+        return (float(excess.mean() / sd * np.sqrt(TRADING_DAYS))
                 if sd > FLAT_RETURN_TOLERANCE else np.nan)
 
     base_var = float(base_ret.var(ddof=1))

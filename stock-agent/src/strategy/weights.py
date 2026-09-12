@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import MAX_GROSS, MAX_WEIGHT, MIN_HISTORY_DAYS
+from config import MAX_GROSS, MAX_SECTOR_WEIGHT, MAX_WEIGHT, MIN_HISTORY_DAYS
 from src.data.panel import PricePanel
 from src.data.universe import UniverseSpec
 
@@ -55,11 +55,12 @@ def target_weights(
     min_history: int = MIN_HISTORY_DAYS,
     max_weight: float = MAX_WEIGHT,
     max_gross: float = MAX_GROSS,
+    max_sector_weight: float = MAX_SECTOR_WEIGHT,
 ) -> pd.Series:
     # Called from the backtest with a full-history panel and from the live runner with a
     # panel ending today; `panel.as_of` guarantees the strategy sees the same shape of
     # information in both cases.
-    _check_limits(max_weight, max_gross)
+    _check_limits(max_weight, max_gross, max_sector_weight)
 
     as_of = pd.Timestamp(as_of)
     history = panel.as_of(as_of)
@@ -74,10 +75,10 @@ def target_weights(
 
     proposed = strategy.propose(as_of, history, candidates)
     return _apply_constraints(proposed, candidates, _proposal_scale(strategy),
-                              max_weight, max_gross)
+                              max_weight, max_gross, max_sector_weight, universe)
 
 
-def _check_limits(max_weight: float, max_gross: float) -> None:
+def _check_limits(max_weight: float, max_gross: float, max_sector_weight: float) -> None:
     # `_apply_constraints` drops non-positive proposals then scales to the gross ceiling, so
     # a negative ceiling flips every surviving weight through zero and a long-only path emits
     # shorts: max_weight=-0.1 turned a proposal of 1.0 into -0.1.
@@ -85,7 +86,8 @@ def _check_limits(max_weight: float, max_gross: float) -> None:
     # NaN is the quiet case — it fails every comparison, so the limit is not applied and the
     # output looks like a portfolio that respected it. Zero stays legal: "hold nothing" is a
     # legitimate instruction, "hold a negative amount of nothing" is not.
-    for name, value in (("max_weight", max_weight), ("max_gross", max_gross)):
+    for name, value in (("max_weight", max_weight), ("max_gross", max_gross),
+                        ("max_sector_weight", max_sector_weight)):
         if not np.isfinite(value):
             raise ValueError(f"{name} must be a finite number, got {value!r}")
         if value < 0:
@@ -111,7 +113,8 @@ def _proposal_scale(strategy: Strategy) -> str:
 
 
 def _apply_constraints(proposed: pd.Series, candidates: list[str], scale: str,
-                       max_weight: float, max_gross: float) -> pd.Series:
+                       max_weight: float, max_gross: float, max_sector_weight: float,
+                       universe: UniverseSpec) -> pd.Series:
     # An "absolute" proposal is scaled down on a breach and never up — a strategy that asked
     # for 40% invested meant it. A "relative" one is normalised in either direction, because
     # its magnitude carries nothing to preserve; it never expressed exposure to invent.
@@ -131,8 +134,21 @@ def _apply_constraints(proposed: pd.Series, candidates: list[str], scale: str,
     # wanted less of would be the risk layer overruling the signal instead of bounding it.
     # It can leave the book below the ceiling, which is correct — a cap is a limit, not a target.
     weights = weights.clip(upper=max_weight)
+    weights = _cap_sectors(weights, universe, max_sector_weight)
 
     return weights.sort_index().round(WEIGHT_PRECISION)
+
+
+def _cap_sectors(weights: pd.Series, universe: UniverseSpec,
+                 max_sector_weight: float) -> pd.Series:
+    # Scaled within the group rather than clipped per name: the sector cap is a statement about
+    # concentration, and flattening the names inside it would overrule the signal as well as bound
+    # it. Only ever reduces, so the per-name cap applied above still holds.
+    for members in universe.sector_groups(weights.index).values():
+        exposure = weights[members].sum()
+        if exposure > max_sector_weight:
+            weights[members] *= max_sector_weight / exposure
+    return weights
 
 
 def _empty_weights() -> pd.Series:

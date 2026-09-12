@@ -18,8 +18,8 @@ from src.models import vol_forecast
 from src.models.vol_forecast import (HAR_FEATURES, LABEL_COL, LABEL_END_COL,
                                      REQUIRED_COLUMNS, VOL_FEATURES, _date_windows,
                                      _qlike, _report_gate, _rmse, _smearing_factor,
-                                     predict_vol, prepare, split_frames,
-                                     train_vol_model, validate_vol_forecast)
+                                     build_oos_vol_panel, predict_vol, prepare,
+                                     split_frames, train_vol_model, validate_vol_forecast)
 
 HORIZON = 5
 
@@ -312,3 +312,56 @@ def test_validation_scores_every_forecaster_on_identical_rows(pooled):
         assert np.isfinite(scores["qlike"])
         assert np.isfinite(scores["rmse"])
     assert isinstance(result["gate_passed"], bool)
+
+
+# --------------------------------------------------------------------------- #
+# the out-of-sample panel the backtest sizes against
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def oos_panel(pooled, tmp_path, monkeypatch) -> pd.DataFrame:
+    monkeypatch.setattr(vol_forecast, "OOS_VOL_PANEL_PATH", tmp_path / "oos.parquet")
+    return build_oos_vol_panel(pooled, n_splits=3, kind="har")
+
+
+def test_the_oos_panel_is_shaped_date_by_ticker(oos_panel):
+    assert list(oos_panel.columns) == ["AAA", "BBB"]
+    assert oos_panel.index.is_monotonic_increasing
+    assert oos_panel.notna().to_numpy().any()
+
+
+def test_the_oos_panel_holds_only_positive_forecasts(oos_panel):
+    values = oos_panel.to_numpy()
+    assert np.nanmin(values) > 0
+
+
+def test_the_oos_panel_starts_after_the_first_training_block(pooled, oos_panel):
+    # The first fold is training-only, so the earliest forecast must sit well inside the
+    # sample. A panel starting at the first date would mean something was fitted on its own
+    # test block, which is the failure this whole construction exists to prevent.
+    assert oos_panel.index.min() > pooled.index.min()
+
+
+def test_a_forecast_never_sees_the_labels_of_its_own_block(pooled, tmp_path, monkeypatch):
+    # The direct test of the property. Corrupt the labels inside one out-of-sample window and
+    # that window's own forecasts must not move: they came from a model fitted before it. Had
+    # the fit included its own test block, these numbers would change. Later blocks legitimately
+    # do move, since the corrupted rows become training data for them, so only this one is checked.
+    monkeypatch.setattr(vol_forecast, "OOS_VOL_PANEL_PATH", tmp_path / "a.parquet")
+    honest = build_oos_vol_panel(pooled, n_splits=3, kind="har")
+
+    dates = honest.index
+    block = dates[len(dates) // 3: 2 * len(dates) // 3]
+    tampered = pooled.copy()
+    inside = tampered.index.isin(block)
+    tampered.loc[inside, LABEL_COL] *= 25.0
+
+    monkeypatch.setattr(vol_forecast, "OOS_VOL_PANEL_PATH", tmp_path / "b.parquet")
+    rebuilt = build_oos_vol_panel(tampered, n_splits=3, kind="har")
+
+    pd.testing.assert_frame_equal(honest.loc[block], rebuilt.loc[block])
+
+
+def test_the_oos_panel_refuses_an_unknown_forecaster(pooled):
+    with pytest.raises(ValueError, match="kind must be one of"):
+        build_oos_vol_panel(pooled, n_splits=2, kind="nonsense")

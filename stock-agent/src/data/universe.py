@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 BENCHMARK = "SPY"
 
@@ -15,9 +15,8 @@ SURVIVORSHIP_CAVEAT = (
     "than removing the selection bias."
 )
 
-# Only the keys are read today; the sector values are inert. Nothing in this repo limits
-# how much of the book sits in one sector — a mapping that looks live and is not invites
-# exactly that assumption. Kept because the grouping is the slow part to get right.
+# Live as of Phase 3: `UniverseSpec.sectors` carries this into the weight path, where
+# MAX_SECTOR_WEIGHT bounds how much of the book one sector can hold.
 SECTOR_MAP = {
     # Technology
     "AAPL": "XLK", "MSFT": "XLK", "NVDA": "XLK", "GOOG": "XLK", "GOOGL": "XLK",
@@ -61,6 +60,15 @@ class UniverseSpec:
     tickers: tuple[str, ...]
     point_in_time: bool
     caveats: tuple[str, ...]
+    sectors: dict[str, str] = field(default_factory=dict)
+
+    def sector_groups(self, tickers) -> dict[str, list[str]]:
+        # A name with no mapping is its own group, so an unmapped ticker is bounded by the
+        # per-name cap rather than escaping the sector cap entirely.
+        groups: dict[str, list[str]] = {}
+        for ticker in tickers:
+            groups.setdefault(self.sectors.get(ticker, ticker), []).append(ticker)
+        return groups
 
     def members_asof(self, date) -> list[str]:
         # Everything, every date: this universe is a snapshot of today with no membership
@@ -81,4 +89,5 @@ UNIVERSE = UniverseSpec(
     tickers=tuple(sorted(SECTOR_MAP)),
     point_in_time=False,
     caveats=(SURVIVORSHIP_CAVEAT,),
+    sectors=dict(SECTOR_MAP),
 )

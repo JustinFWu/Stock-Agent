@@ -8,7 +8,7 @@ from sklearn.linear_model import LinearRegression
 from xgboost import XGBRegressor
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import MODELS_DIR, FORWARD_DAYS
+from config import FEATURES_DIR, MODELS_DIR, FORWARD_DAYS
 from src.storage import atomic_path
 
 # A pre-committed gate: xgb must forecast next week's realized vol better than cheap,
@@ -43,6 +43,7 @@ VOL_FEATURES = [
 HAR_FEATURES = ["rv_1d", "rv_5d", "rv_21d"]
 
 VOL_MODEL_PATH = MODELS_DIR / "vol_forecast.joblib"
+OOS_VOL_PANEL_PATH = FEATURES_DIR / "oos_vol_panel.parquet"
 
 # One list, because a *partial* frame is the dangerous case: narrowing the feature set to
 # whatever happened to be present fits a different model against the same gate, with no
@@ -346,6 +347,54 @@ def train_vol_model(df: pd.DataFrame, kind: str = "xgb") -> Path:
           f"({len(clean):,} rows, {len(payload['features'])} features, "
           f"smearing {payload['smearing']:.4f})")
     return VOL_MODEL_PATH
+
+
+def build_oos_vol_panel(df: pd.DataFrame, n_splits: int = 5, kind: str = "xgb") -> pd.DataFrame:
+    # The forecast the *backtest* must size against. `train_vol_model` fits on the full history,
+    # which is right for live use and look-ahead in a backtest: a 2010 position sized by a model
+    # that has seen 2020 is not a measurement. Each row here comes from a model trained only on
+    # dates before its own test block, which is what `split_frames` already guarantees.
+    if kind not in FORECASTERS:
+        raise ValueError(f"kind must be one of {sorted(FORECASTERS)}, got {kind!r}")
+
+    clean, feature_cols = prepare(df)
+    if "ticker" not in clean.columns:
+        raise ValueError("Frame needs a `ticker` column to pivot forecasts into a panel.")
+
+    forecaster = FORECASTERS[kind]
+    blocks = []
+    for fold, train, test in split_frames(clean, n_splits):
+        blocks.append(pd.DataFrame({
+            "date": test.index,
+            "ticker": test["ticker"].to_numpy(),
+            "vol": forecaster(train, test, feature_cols),
+        }))
+        print(f"  fold {fold}: {len(test):,} rows "
+              f"{test.index.min().date()} to {test.index.max().date()}")
+
+    if not blocks:
+        raise ValueError("No evaluable walk-forward folds — try fewer splits.")
+
+    panel = (pd.concat(blocks)
+             .pivot_table(index="date", columns="ticker", values="vol")
+             .sort_index())
+    panel.attrs["kind"] = kind
+    panel.attrs["n_splits"] = n_splits
+
+    with atomic_path(OOS_VOL_PANEL_PATH) as tmp:
+        panel.to_parquet(tmp)
+    print(f"Saved {kind} out-of-sample vol panel -> {OOS_VOL_PANEL_PATH}  "
+          f"({panel.shape[0]:,} dates x {panel.shape[1]} tickers, "
+          f"{panel.index.min().date()} to {panel.index.max().date()})")
+    return panel
+
+
+def load_oos_vol_panel() -> pd.DataFrame:
+    if not OOS_VOL_PANEL_PATH.exists():
+        raise FileNotFoundError(
+            f"No out-of-sample vol panel at {OOS_VOL_PANEL_PATH}. Build it with "
+            "`pipeline.py --build-vol-panel` before backtesting a vol-targeted strategy.")
+    return pd.read_parquet(OOS_VOL_PANEL_PATH)
 
 
 def predict_vol(payload: dict, df: pd.DataFrame) -> np.ndarray:

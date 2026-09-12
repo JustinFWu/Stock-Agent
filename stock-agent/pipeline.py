@@ -4,13 +4,17 @@ Entry point.
     python pipeline.py --fetch           # Phase 0: pull ~20y of adjusted bars for the universe
     python pipeline.py --vol-validate    # Phase 1 gate: xgb vs rw / ewma / har-rv
     python pipeline.py --train-vol       # fit and save the production forecaster
-    python pipeline.py --backtest        # Phase 2: run the cost-aware backtester
+    python pipeline.py --build-vol-panel # Phase 3: walk-forward vol forecasts for the backtest
+    python pipeline.py --backtest --strategy vol-momentum   # Phase 3: the strategy
 
-Direction (which names, long or short) is not decided here — that is Phase 3's
-momentum signal. The volatility stage answers only "how volatile is each name
-about to be", which is what the sizing layer needs; the backtest currently runs
-an equal-weight placeholder, which exercises the machinery without pretending to
-be a strategy.
+--strategy picks what is being measured and --baseline what it is measured against.
+The Phase 3 gate needs two runs: vol-momentum against equal for the information
+ratio, and vol-momentum against momentum for the question of whether scaling earns
+its place.
+
+A vol-targeted run sizes against the walk-forward panel from --build-vol-panel, not
+the saved production model: that model is fitted on the full history, which is right
+for live use and look-ahead inside a backtest.
 """
 
 import argparse
@@ -20,7 +24,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from config import NO_TRADE_BAND
+from config import CASH_ANNUAL_RATE, NO_TRADE_BAND, VOL_TARGET_ANNUAL
 from src.backtest.costs import ALPACA_COSTS, PESSIMISTIC_COSTS, ZERO_COSTS
 from src.backtest.engine import run_backtest
 from src.data.dataset import build_pooled_dataset
@@ -28,7 +32,10 @@ from src.data.fetcher import fetch_and_save, is_current
 from src.backtest.metrics import format_relative_summary, summarize_relative
 from src.data.panel import load_price_panel
 from src.data.universe import BENCHMARK, UNIVERSE
-from src.models.vol_forecast import validate_vol_forecast, train_vol_model
+from src.models.vol_forecast import (build_oos_vol_panel, load_oos_vol_panel,
+                                     train_vol_model, validate_vol_forecast)
+from src.strategy.momentum import (MomentumStrategy, PanelVolForecast,
+                                   RealizedVolForecast, VolTargetedMomentum)
 from src.strategy.weights import EqualWeightStrategy
 
 
@@ -77,25 +84,50 @@ def do_train_vol(kind: str, force_rebuild: bool, refetch: bool) -> None:
 COST_MODELS = {"alpaca": ALPACA_COSTS, "pessimistic": PESSIMISTIC_COSTS, "zero": ZERO_COSTS}
 
 
-def do_backtest(rebalance: str, cost_model: str, band: float, start: str | None) -> None:
+def do_build_vol_panel(n_splits: int, kind: str, force_rebuild: bool, refetch: bool) -> None:
+    print("\n[1/2] Building pooled dataset...")
+    df = build_pooled_dataset(list(UNIVERSE.tickers), force_rebuild=force_rebuild, refetch=refetch)
+
+    print(f"\n[2/2] Walk-forward {kind} forecasts, {n_splits} splits...")
+    build_oos_vol_panel(df, n_splits=n_splits, kind=kind)
+
+
+STRATEGIES = ("equal", "momentum", "vol-momentum")
+VOL_SOURCES = ("panel", "ewma")
+
+
+def build_strategy(name: str, vol_source: str, vol_target: float):
+    if name == "equal":
+        return EqualWeightStrategy()
+    if name == "momentum":
+        return MomentumStrategy()
+    forecast = (RealizedVolForecast() if vol_source == "ewma"
+                else PanelVolForecast(load_oos_vol_panel()))
+    return VolTargetedMomentum(forecast, vol_target=vol_target)
+
+
+def do_backtest(strategy_name: str, baseline_name: str, vol_source: str, vol_target: float,
+                rebalance: str, cost_model: str, band: float, start: str | None,
+                cash_rate: float) -> None:
     # The baseline run is not optional, and that is the point: on a survivorship-biased
     # universe an absolute Sharpe means nothing, so the runner always computes the
     # same-universe baseline. Enforcement by construction beats enforcement by discipline.
-
-    # Phase 2 has no strategy yet, so the strategy IS the baseline and the relative block is
-    # trivially zero — correct for a session whose deliverable is the machinery, and it makes
-    # the comparison visible from the day Phase 3's signal is dropped in.
-    strategy = EqualWeightStrategy()
-    baseline = EqualWeightStrategy()
+    strategy = build_strategy(strategy_name, vol_source, vol_target)
+    baseline = build_strategy(baseline_name, vol_source, vol_target)
+    if strategy.name == baseline.name:
+        print(f"  note: strategy and baseline are both {strategy.name}, so the relative "
+              "block below is trivially zero")
 
     print(f"\n[1/3] Loading price panel for {len(UNIVERSE.tickers)} names...")
     panel = load_price_panel(list(UNIVERSE.tickers))
     print(f"  {len(panel.tickers)} tickers, {panel.dates[0].date()} to {panel.dates[-1].date()}")
 
     settings = {"universe": UNIVERSE, "start": start, "rebalance": rebalance,
-                "costs": COST_MODELS[cost_model], "no_trade_band": band}
+                "costs": COST_MODELS[cost_model], "no_trade_band": band,
+                "cash_annual_rate": cash_rate}
 
-    print(f"\n[2/3] Backtesting {strategy.name} ({cost_model} costs, {rebalance} rebalance)...")
+    print(f"\n[2/3] Backtesting {strategy.name} ({cost_model} costs, {rebalance} rebalance, "
+          f"cash {cash_rate:.2%})...")
     result = run_backtest(panel, strategy, **settings)
 
     print(f"\n[3/3] Baseline {baseline.name} on the same universe, engine and costs...")
@@ -103,8 +135,9 @@ def do_backtest(rebalance: str, cost_model: str, band: float, start: str | None)
 
     print(result.describe())
     print()
-    print(format_relative_summary(summarize_relative(result.equity, baseline_result.equity),
-                          baseline.name))
+    relative = summarize_relative(result.equity, baseline_result.equity,
+                                  risk_free_rate=cash_rate)
+    print(format_relative_summary(relative, baseline.name))
 
 
 if __name__ == "__main__":
@@ -118,6 +151,18 @@ if __name__ == "__main__":
                         help="Fit and save the production vol forecaster")
     parser.add_argument("--backtest", action="store_true",
                         help="Run the cost-aware backtester (Phase 2)")
+    parser.add_argument("--build-vol-panel", action="store_true",
+                        help="Walk-forward vol forecasts for the backtest to size against (Phase 3)")
+    parser.add_argument("--strategy", choices=STRATEGIES, default="equal",
+                        help="What the backtest measures (default equal)")
+    parser.add_argument("--baseline", choices=STRATEGIES, default="equal",
+                        help="What it is measured against (default equal)")
+    parser.add_argument("--vol-source", choices=VOL_SOURCES, default="panel",
+                        help="Where vol-momentum gets its forecast (default panel)")
+    parser.add_argument("--vol-target", type=float, default=VOL_TARGET_ANNUAL,
+                        help=f"Annualised portfolio vol target (default {VOL_TARGET_ANNUAL})")
+    parser.add_argument("--cash-rate", type=float, default=CASH_ANNUAL_RATE,
+                        help=f"Annual rate credited on idle cash (default {CASH_ANNUAL_RATE})")
     parser.add_argument("--rebalance", choices=["D", "W", "M", "Q"], default="M",
                         help="Backtest rebalance frequency (default monthly)")
     parser.add_argument("--costs", choices=sorted(COST_MODELS), default="alpaca",
@@ -143,8 +188,12 @@ if __name__ == "__main__":
         do_vol_validate(args.splits, args.rebuild, args.refetch)
     elif args.train_vol:
         do_train_vol(args.kind, args.rebuild, args.refetch)
+    elif args.build_vol_panel:
+        do_build_vol_panel(args.splits, args.kind, args.rebuild, args.refetch)
     elif args.backtest:
-        do_backtest(args.rebalance, args.costs, args.band, args.start)
+        do_backtest(args.strategy, args.baseline, args.vol_source, args.vol_target,
+                    args.rebalance, args.costs, args.band, args.start, args.cash_rate)
     else:
         # `parser.error` prints usage and exits 2 itself; nothing follows it.
-        parser.error("choose one of --fetch / --vol-validate / --train-vol / --backtest")
+        parser.error("choose one of --fetch / --vol-validate / --train-vol / "
+                     "--build-vol-panel / --backtest")

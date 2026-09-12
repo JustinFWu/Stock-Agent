@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import MAX_GROSS, MAX_WEIGHT, MIN_HISTORY_DAYS, NO_TRADE_BAND, TRADING_DAYS
+from config import (MAX_GROSS, MAX_SECTOR_WEIGHT, MAX_WEIGHT, MIN_HISTORY_DAYS,
+                    NO_TRADE_BAND, TRADING_DAYS)
 from src.backtest.costs import ALPACA_COSTS, MAX_CREDIBLE_PARTICIPATION, CostModel
 from src.backtest.metrics import format_summary, summarize
 from src.backtest.portfolio import Portfolio, execute, plan_trades
@@ -86,6 +87,7 @@ def run_backtest(
     min_history: int = MIN_HISTORY_DAYS,
     max_weight: float = MAX_WEIGHT,
     max_gross: float = MAX_GROSS,
+    max_sector_weight: float = MAX_SECTOR_WEIGHT,
     cash_annual_rate: float = 0.0,
     caveats: tuple[str, ...] = (),
 ) -> BacktestResult:
@@ -172,7 +174,8 @@ def run_backtest(
         if date in rebalance_dates and i < len(dates) - 1:
             pending = target_weights(date, panel, strategy, universe=universe,
                                      min_history=min_history, max_weight=max_weight,
-                                     max_gross=max_gross)
+                                     max_gross=max_gross,
+                                     max_sector_weight=max_sector_weight)
             owed = None
             target_history[date] = pending
 
@@ -220,6 +223,7 @@ def run_backtest(
             "no_trade_band": no_trade_band,
             "max_weight": max_weight,
             "max_gross": max_gross,
+            "max_sector_weight": max_sector_weight,
             "min_history": min_history,
             "initial_cash": initial_cash,
             "cash_annual_rate": cash_annual_rate,

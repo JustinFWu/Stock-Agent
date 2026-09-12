@@ -236,6 +236,12 @@
     border-top: 2px solid var(--ink);
     padding-top: 14px;
   }
+  /* A turn within a section rather than a new one: same type, lighter rule. */
+  .section-head.minor {
+    border-top-width: 1px;
+    border-top-color: var(--rule);
+    margin-top: 10px;
+  }
 
   /* ---------- layer stack ---------- */
 
@@ -325,13 +331,23 @@
   }
   .phase.cleared .gate-line b { color: var(--accent); }
 
+  .phase.failed { background: var(--stop-wash); }
+  .phase.failed .gate-line {
+    background: transparent;
+    border-left-color: var(--stop);
+  }
+  .phase.failed .gate-line b,
+  .phase.failed .gate-line .sub,
+  .phase.failed .gate-line li::marker { color: var(--stop); }
+
   .phase-title {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 6px 12px;
   }
-  .cleared-badge {
+  .cleared-badge,
+  .failed-badge {
     font-family: var(--sans);
     font-size: 0.62rem;
     font-weight: 700;
@@ -342,6 +358,7 @@
     border-radius: 2px;
     padding: 1px 7px;
   }
+  .failed-badge { color: var(--stop); border-color: var(--stop); }
 
   .phase-body {
     display: flex;
@@ -492,6 +509,7 @@
   .tag.keep    { background: var(--accent-wash); color: var(--accent); }
   .tag.retool  { background: var(--gate-wash);   color: var(--gate); }
   .tag.parked  { background: var(--stop-wash);   color: var(--stop); }
+  .tag.failed  { background: var(--stop-wash);   color: var(--stop); }
 
   /* ---------- decisions ---------- */
 
@@ -604,7 +622,7 @@
       <span><b>branch</b> feat/vol-targeted-momentum</span>
       <span><b>opened</b> 2026-08-07</span>
       <span><b>supersedes</b> cross-sectional ranking (no-go)</span>
-      <span><b>status</b> phases 0-2 cleared &middot; phase 3 open</span>
+      <span><b>status</b> phases 0-2 cleared &middot; phase 3 gate failed</span>
     </div>
   </header>
 
@@ -632,6 +650,13 @@
         So the two halves are not bolted together. The vol forecast is the documented remedy for
         momentum's documented weakness. That is the thesis, and everything below is in service of
         testing it honestly and then trading it unattended.
+      </p>
+      <p>
+        <b>It was tested, and on this universe it did not hold.</b> Phase 3 failed its gate: the
+        momentum signal does not beat an equal-weight book risk-adjusted, and vol targeting reduced
+        risk without improving risk-adjusted return. The paragraph above is left as written because
+        it is what the branch was opened on &mdash; the result is further down, and the reason the
+        crash remedy had nothing to remedy turns out to be a decision made on this very page.
       </p>
     </div>
   </section>
@@ -754,24 +779,23 @@
         </div>
       </article>
 
-      <article class="phase">
+      <article class="phase failed">
         <div class="phase-num">3<small>strategy</small></div>
         <div class="phase-body">
-          <h3>Signal, sizing, and the risk layer</h3>
+          <div class="phase-title">
+            <h3>Signal, sizing, and the risk layer</h3>
+            <span class="failed-badge">Gate failed</span>
+          </div>
           <dl class="kv">
             <dt>Deliverable</dt>
             <dd>12&ndash;2 momentum (formation t&minus;12 to t&minus;2, skipping the most recent month) &rarr; top-decile long-only selection &rarr; vol-targeted weights from a Ledoit&ndash;Wolf shrunk covariance &rarr; the hard risk layer.</dd>
             <dt>Why shrinkage</dt>
             <dd>Correlations spike in exactly the drawdowns you're sizing against. Naive inverse-vol weighting understates portfolio risk when it matters most; shrinkage is one scikit-learn call and it is the difference between a vol target that holds and one that blows through.</dd>
-            <dt>Before code</dt>
-            <dd>Three settings already carry notes in the source and are wrong at their current values.
-            <code>MIN_HISTORY_DAYS</code> rises 252 &rarr; ~273: a 12&ndash;2 formation window reaches back
-            thirteen months, so a name with exactly 252 bars would rank on a truncated, higher-vol window
-            against names measured over a full one. <code>cash_annual_rate</code> defaults to 0 and must be
-            set deliberately &mdash; vol targeting holds a lot of cash, and crediting it nothing understates
-            the strategy. And vol-targeted weights are <code>proposal_scale = "absolute"</code>, the case
-            that machinery was built for: a sum of 0.7 is a deliberate 30% cash position, which is exactly
-            what a naive normaliser would silently spend.</dd>
+            <dt>As built</dt>
+            <dd><code>src/strategy/momentum.py</code>. The backtest sizes against a walk-forward vol panel,
+            not the saved production model &mdash; that one is fitted on the full history, which is correct
+            for live use and look-ahead inside a backtest. Selection is shared by both arms, so the
+            comparison measures the sizing rather than the names.</dd>
           </dl>
           <div class="gate-line">
             <b>Gate &mdash; rewritten 2026-09-12, before any Phase 3 number existed</b>
@@ -792,10 +816,16 @@
             </ol>
           </div>
           <div class="gate-line">
-            <b>And binding</b> A passing Phase 3 is <i>provisional</i> until re-run on point-in-time data.
-            None of the three tests above removes survivorship &mdash; they only narrow what it can
-            explain. The Phase 4 paper record is the first genuinely out-of-sample evidence this project
-            will ever have.
+            <b>Result &mdash; fail</b> Information ratio <span class="mono">&minus;0.53</span> against the
+            0.2 threshold. Unscaled momentum alone reaches only <span class="mono">+0.14</span>, at a Sharpe
+            <i>below</i> the baseline's. Vol targeting cut volatility 20.4% &rarr; 12.1% and drawdown
+            &minus;26.7% &rarr; &minus;15.8%, and cost 6.2pp/yr of return to do it. Full numbers below.
+          </div>
+          <div class="gate-line">
+            <b>And binding</b> A passing Phase 3 would have been <i>provisional</i> until re-run on
+            point-in-time data. None of the three tests removes survivorship &mdash; they only narrow what
+            it can explain. The Phase 4 paper record is the first genuinely out-of-sample evidence this
+            project will ever have.
           </div>
         </div>
       </article>
@@ -803,7 +833,10 @@
       <article class="phase">
         <div class="phase-num">4<small>production</small></div>
         <div class="phase-body">
-          <h3>Execution and reconciliation on paper</h3>
+          <div class="phase-title">
+            <h3>Execution and reconciliation on paper</h3>
+            <span class="cleared-badge">Active</span>
+          </div>
           <dl class="kv">
             <dt>Deliverable</dt>
             <dd>A <code>Broker</code> interface &mdash; positions, account, submit, fills &mdash; with an Alpaca implementation behind it. Position reconciler, idempotent order state, scheduled unattended runs, monitoring and alerting.</dd>
@@ -814,7 +847,14 @@
           </dl>
           <div class="gate-line">
             <b>Gate</b> Thirty consecutive unattended sessions with zero manual intervention and
-            positions reconciling exactly each day. Only then does live capital become a conversation.
+            positions reconciling exactly each day.
+          </div>
+          <div class="gate-line">
+            <b>Amended 2026-09-12, after the Phase 3 result</b> This card used to end &ldquo;only then
+            does live capital become a conversation.&rdquo; It no longer does. Phase 4 tests the
+            plumbing; with Phase 3 failed there is no measured edge for that plumbing to trade, and
+            passing an operations gate is not evidence about a strategy. Two questions, two bodies of
+            evidence. Raising the operational bar is not how the other one gets answered.
           </div>
         </div>
       </article>
@@ -1083,6 +1123,251 @@
 
   <section>
     <div class="section-head">
+      <p class="eyebrow">Phase 3 result</p>
+      <h2>The signal is not there, and the gate said so.</h2>
+    </div>
+    <p class="prose">
+      17.7 years, 2008-11-12 to 2026-08-06, monthly rebalance, Alpaca costs, idle cash credited
+      at 2%. The window opens where the walk-forward vol panel opens &mdash; its first fold is
+      training-only. Every Sharpe below is netted of that cash rate.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Strategy</th><th>CAGR</th><th>Ann vol</th><th>Max DD</th>
+            <th>Sharpe</th><th>Beta</th><th>IR vs equal</th><th>Gross</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Equal weight &mdash; the baseline</td>
+            <td class="num">19.20%</td><td class="num">17.29%</td><td class="num">&minus;32.8%</td>
+            <td class="num">0.99</td><td class="num">&mdash;</td><td class="num">&mdash;</td>
+            <td class="num">94.6%</td>
+          </tr>
+          <tr>
+            <td>12&ndash;2 momentum, unscaled</td>
+            <td class="num">20.56%</td><td class="num">20.36%</td><td class="num">&minus;26.7%</td>
+            <td class="num">0.92</td><td class="num">0.95</td><td class="num">+0.14</td>
+            <td class="num">88.1%</td>
+          </tr>
+          <tr class="highlight">
+            <td>Vol-targeted momentum</td>
+            <td class="num">13.04%</td><td class="num">12.12%</td><td class="num">&minus;15.8%</td>
+            <td class="num">0.91</td><td class="num">0.53</td><td class="num">&minus;0.53</td>
+            <td class="num">61.0%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>
+        <b>Neither arm beats the baseline's 0.99.</b> That is the result in one line. The signal is
+        the problem, not the sizing: unscaled momentum reaches an information ratio of +0.14 against
+        a 0.2 threshold, at a <i>lower</i> Sharpe than doing nothing. Vol targeting cannot rescue a
+        signal that is not there.
+      </p>
+      <p>
+        The sizing layer itself worked. Mean target gross 55%, never at the ceiling, realised
+        volatility 12.1% against a 10% target &mdash; it did what it was built to do, halving both
+        volatility and drawdown. In a seventeen-year bull market the cash that requires cost
+        6.2pp/yr of CAGR. Risk control, not alpha, and the gate asked for alpha.
+      </p>
+      <p>
+        Both forecast sources fail, and the model panel beats the parameter-free one by a hair
+        &mdash; IR &minus;0.53 against &minus;0.54 for EWMA. Consistent with Phase 1's 5&ndash;9%
+        forecast edge being real and small. The failure is not an artefact of the forecast.
+      </p>
+    </div>
+
+    <div class="callout">
+      <h3>The gate has a hole, and relaxing a risk limit found it</h3>
+      <p>
+        The per-name cap was removed to test whether it was hiding the signal. It was not &mdash; but
+        the information ratio climbed straight through the threshold anyway.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Caps</th><th>Gross</th><th>Beta</th><th>IR</th><th>Sharpe</th><th>Max DD</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>10% per name, 30% sector</td><td class="num">88.1%</td><td class="num">0.95</td>
+                <td class="num">+0.14</td><td class="num">0.92</td><td class="num">&minus;26.7%</td></tr>
+            <tr><td>None</td><td class="num">99.5%</td><td class="num">1.10</td>
+                <td class="num">+0.36</td><td class="num">0.92</td><td class="num">&minus;31.9%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        IR tracks beta while Sharpe stays pinned at 0.92 and drawdown gets worse. The baseline is a
+        fixed equal-weight book, so any higher-beta portfolio earns positive active return
+        mechanically in a rising market. <b>An IR threshold on its own is passable by buying more of
+        the same risk.</b>
+      </p>
+      <p>
+        The gate was not amended &mdash; that window closed when the first number existed, and the
+        failure stands on its own terms. But the next one needs a beta control beside the IR: the
+        appraisal ratio on beta-neutralised active returns, or a requirement that Sharpe improve too.
+        Recorded so whoever re-runs this on point-in-time data does not inherit the hole.
+      </p>
+    </div>
+
+    <div class="section-head minor">
+      <p class="eyebrow">The thesis</p>
+      <h2>The crash it was built for never happened to a long-only book.</h2>
+    </div>
+    <p class="prose">
+      The premise of this branch is that vol targeting is the documented remedy for the documented
+      momentum crash. Episode returns, vol-targeted against unscaled momentum &mdash; the comparison
+      the thesis actually makes:
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Episode</th><th>Equal weight</th><th>Momentum</th><th>Vol-targeted</th><th>Protected?</th></tr>
+        </thead>
+        <tbody>
+          <tr class="highlight"><td>2009 momentum crash (Mar&ndash;Jun)</td><td class="num">+41.2%</td>
+              <td class="num">+9.6%</td><td class="num">+4.1%</td><td>no</td></tr>
+          <tr><td>2011 August selloff</td><td class="num">&minus;5.2%</td>
+              <td class="num">&minus;12.0%</td><td class="num">&minus;6.3%</td><td>yes</td></tr>
+          <tr><td>2015&ndash;16 correction</td><td class="num">&minus;3.7%</td>
+              <td class="num">+0.1%</td><td class="num">+1.0%</td><td>yes</td></tr>
+          <tr><td>2018 Q4</td><td class="num">&minus;11.8%</td>
+              <td class="num">&minus;20.1%</td><td class="num">&minus;14.5%</td><td>yes</td></tr>
+          <tr><td>2020 covid crash</td><td class="num">&minus;12.7%</td>
+              <td class="num">&minus;1.7%</td><td class="num">&minus;5.2%</td><td>no</td></tr>
+          <tr><td>2022 bear</td><td class="num">&minus;11.5%</td>
+              <td class="num">+4.7%</td><td class="num">+4.8%</td><td>flat</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>
+        Three of six &mdash; and it failed in the one episode the thesis was built on. In 2009 the
+        long-only book did not crash. It returned +9.6% while the universe returned +41.2%: it
+        <i>lagged a junk rally</i>, and vol targeting deepened the lag by sitting in cash through it.
+      </p>
+      <p>
+        That is not a bug, and the reason is already written down two sections above, under
+        <i>Long-only for v1</i>: <b>most of momentum's crash risk lives in the short leg.</b> v1 removed
+        the short leg, which removed most of the risk the sizing layer exists to neutralise. The thesis
+        and the implementation have been in tension since the design; this is the first measurement of
+        it. A fair test of vol-targeted momentum needs a long/short book.
+      </p>
+    </div>
+
+    <div class="callout">
+      <h3>Two defects the run exposed, both fixed</h3>
+      <p>
+        A top decile of 82 names is eight names, and eight names under a 10% per-name cap top out at
+        80% gross &mdash; so the risk layer quietly turned the remaining 20% into cash, and
+        <code>proposal_scale = "absolute"</code> then read that as a <i>deliberate</i> position the
+        strategy never chose. Worth 0.12 of information ratio. Fixed by deriving a selection floor
+        from the risk limits rather than by picking a better number:
+        <code>MIN_SELECTED_NAMES = ceil(MAX_GROSS / MAX_WEIGHT)</code>.
+      </p>
+      <p>
+        And one report carried two Sharpe conventions &mdash; <code>summarize</code> netted the
+        risk-free rate, <code>summarize_relative</code> did not, so the same curve scored 0.97 in one
+        block and 1.14 in another. This one had teeth: it flattered precisely the strategy holding the
+        most cash. Charging that cash the risk-free rate <b>reversed the secondary gate's sign</b>, from
+        an apparent 1.14-against-1.10 win to a 0.91-against-0.99 loss.
+      </p>
+    </div>
+
+    <p class="prose">
+      <b>What this does not license.</b> The universe is 82 survivors, and &ldquo;momentum has no
+      edge&rdquo; measured on names selected for having survived is close to unfalsifiable &mdash;
+      momentum's would-be losers are disproportionately the names removed before the test began. The
+      honest claim is narrow: on this universe, over this window, 12&ndash;2 momentum did not beat its
+      own baseline risk-adjusted, and vol targeting reduced risk without improving risk-adjusted
+      return. It is not a finding about momentum. Full working in
+      <code>docs/phase3-strategy.md</code>.
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Where next</p>
+      <h2>Two projects, and only one of them is blocked.</h2>
+    </div>
+    <div class="prose">
+      <p>
+        This branch was opened on a framing worth restating now that a second alpha search has come
+        back negative: <b>&ldquo;find alpha&rdquo; and &ldquo;build an autonomous system&rdquo; are
+        separate projects, and the second is achievable engineering.</b> Phase 3 does not overturn
+        that. It is the second piece of evidence for it.
+      </p>
+      <p>
+        So the decision is to <b>proceed to Phase 4 rather than keep searching for an edge.</b> Phase
+        4 is the only remaining phase whose gate does not depend on having one &mdash; thirty clean
+        unattended sessions is an operations test, passed or failed by the code. Everything upstream
+        is built and gated, the strategy is a swappable part behind one protocol, and
+        <code>live_target_weights</code> already exists and already refuses a stale cache.
+      </p>
+      <p>
+        It is also the only thing that produces evidence this project does not already have. Every
+        figure here is self-graded on 82 survivors. The forward paper record is the first genuinely
+        out-of-sample sample, and it accrues on its own once the loop runs.
+      </p>
+    </div>
+
+    <div class="gate-line">
+      <b>The guardrail, written down before it is inconvenient</b>
+      Thirty clean sessions proves the plumbing, not the strategy. With Phase 3 failed, a passing
+      Phase 4 is <i>not</i> the conversation about live capital that the phase card describes. The
+      operational win must not be read as permission; those are separate questions with separate
+      evidence, and this line exists because the temptation arrives later, not now.
+    </div>
+
+    <div class="prose">
+      <p>
+        <b>What to run on paper: the vol-targeted book, precisely because it failed the alpha gate.</b>
+        Half the beta and half the drawdown of the baseline. The thing to run unattended for thirty
+        sessions while order reconciliation and crash recovery are being debugged is the thing that
+        moves least. It is a risk-managed beta vehicle, and calling it anything else is how a
+        plumbing test turns into a track record nobody meant to claim.
+      </p>
+    </div>
+
+    <div class="section-head minor">
+      <p class="eyebrow">If the alpha question reopens</p>
+      <h2>One move is worth making, and it is not a model.</h2>
+    </div>
+    <div class="prose">
+      <p>
+        <b>Point-in-time constituents with delisted histories.</b> Every conclusion on this branch is
+        measured on names selected for having survived, a bias whose direction is statable and whose
+        size is not measurable from inside the sample. The options are in <i>The binding constraint</i>
+        above. Nothing else in the research direction is worth money or time before that is fixed.
+      </p>
+      <p>
+        Two consequences. First, <b>long/short is the interesting experiment and must not be run on
+        this data</b>: the 2009 episode showed the crash risk lives in the leg v1 does not have, but
+        the short leg is exactly where survivorship bites hardest &mdash; the names that would be the
+        shorts are the ones missing. Long/short on survivor-82 would be worse than uninformative.
+        Point-in-time data first, then it is the test the thesis always needed.
+      </p>
+      <p>
+        Second, Phase 4 makes that revisit cheaper rather than harder. <code>members_asof()</code> is
+        already the seam; the engine, the strategy and the weight path do not change when a real
+        membership table arrives. Doing the engineering first forecloses nothing.
+      </p>
+      <p>
+        <b>Not worth doing:</b> sweeping the vol target, the selection fraction, or the rebalance
+        frequency. Sharpe sat pinned near the baseline across every configuration tried, including
+        with the risk limits removed entirely. A search would eventually produce a pass and it would
+        mean nothing. What makes the negatives on this project worth trusting is that it has not done
+        this yet.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
       <p class="eyebrow">Gates</p>
       <h2>Written down before the results exist.</h2>
     </div>
@@ -1111,21 +1396,21 @@
             <td>Information ratio vs same-universe equal weight, net of costs <small>&mdash; primary</small></td>
             <td class="num">&gt; 0.2</td>
             <td>Reconsider universe before reconsidering model</td>
-            <td><span class="tag retool">Pending</span></td>
+            <td><span class="tag failed">Failed &minus;0.53</span></td>
           </tr>
           <tr>
             <td class="num">3</td>
             <td>Vol-targeted vs unscaled momentum</td>
             <td class="num">must improve</td>
             <td>Thesis is wrong &mdash; stop and reassess</td>
-            <td><span class="tag retool">Pending</span></td>
+            <td><span class="tag failed">Failed &minus;0.81</span></td>
           </tr>
           <tr>
             <td class="num">3</td>
             <td>Net Sharpe vs the measured baseline <small>&mdash; necessary, not sufficient</small></td>
             <td class="num">&ge; 0.87</td>
             <td>Below the do-nothing baseline is a no-go on its own</td>
-            <td><span class="tag retool">Pending</span></td>
+            <td><span class="tag keep">Met 0.91</span></td>
           </tr>
           <tr>
             <td class="num">4</td>
@@ -1246,6 +1531,24 @@
         </p>
       </div>
       <div class="decision">
+        <h3>The system is the project, the edge is not</h3>
+        <p>
+          Two alpha searches, two clean negatives, two engineering gates passed. The evidence says
+          which of these is the tractable project. Phase 4 proceeds without an edge because its gate
+          never needed one &mdash; and the strategy sits behind one protocol, so a better one drops
+          in later without touching the machinery.
+        </p>
+      </div>
+      <div class="decision">
+        <h3>No long/short until the data is point-in-time</h3>
+        <p>
+          It is the test the thesis always needed, and survivorship bites hardest exactly there: the
+          names that would be the shorts are the ones missing from this universe. Running it on
+          survivor-82 would produce a number worse than uninformative, because it would look like an
+          answer.
+        </p>
+      </div>
+      <div class="decision">
         <h3>Expectations, set honestly</h3>
         <p>
           Momentum has decayed in US mega-caps. Raw long/short Sharpe of roughly 0.3&ndash;0.5,
@@ -1294,7 +1597,10 @@
     Living document on branch feat/vol-targeted-momentum. Gates are pre-committed &mdash;
     amend them only before a result is known, never after.
     <br>Amended 2026-09-12: the Phase 3 gate, replaced because the original was unfalsifiable on this
-    universe. No Phase 3 number existed at the time of the change, and none has been computed since.
+    universe. No Phase 3 number existed at the time of the change.
+    <br>Run 2026-09-12: Phase 3 failed that gate at an information ratio of &minus;0.53. The gate was
+    not touched afterwards, and the demonstrated hole in it &mdash; an IR threshold is passable by
+    beta &mdash; is recorded above rather than patched into a pass.
   </footer>
 
 </div>

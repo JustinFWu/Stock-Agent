@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from config import (MAX_GROSS, MAX_LIVE_STALENESS_DAYS, MAX_WEIGHT,
+from config import (MAX_GROSS, MAX_LIVE_STALENESS_DAYS, MAX_SECTOR_WEIGHT, MAX_WEIGHT,
                     MIN_HISTORY_DAYS, MIN_LIVE_COVERAGE)
 from src.data.panel import PricePanel, load_price_panel
 from src.data.universe import UNIVERSE, UniverseSpec
@@ -27,6 +27,7 @@ def live_target_weights(
     min_history: int = MIN_HISTORY_DAYS,
     max_weight: float = MAX_WEIGHT,
     max_gross: float = MAX_GROSS,
+    max_sector_weight: float = MAX_SECTOR_WEIGHT,
     max_staleness_days: int = MAX_LIVE_STALENESS_DAYS,
     min_coverage: float = MIN_LIVE_COVERAGE,
     today=None,
@@ -56,7 +57,7 @@ def live_target_weights(
 
     return target_weights(as_of, panel, strategy, universe=universe,
                           min_history=min_history, max_weight=max_weight,
-                          max_gross=max_gross)
+                          max_gross=max_gross, max_sector_weight=max_sector_weight)
 
 
 def _check_live_data(panel: PricePanel, as_of, universe: UniverseSpec, min_history: int,

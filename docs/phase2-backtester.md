@@ -1,9 +1,12 @@
 # Phase 2 — Cost-aware backtester
 
-**Date:** 2026-08-19
+**Date:** 2026-08-19 — §7 updated 2026-09-12
 **Branch:** `feat/vol-targeted-momentum`
-**Status:** built, tested, verified. Uncommitted.
+**Status:** built, tested, verified, committed as `d9a0538`.
 **Gate:** met, and verified adversarially (see §3).
+**Follow-up:** the open decision this document raised in §7 was resolved on
+2026-09-12. The Phase 3 gate has been rewritten in `roadmap.html`; §7 now records
+what was decided rather than asking for a decision.
 
 This is the working record for the Phase 2 session: what was built, what was
 measured, what the review found, and what was fixed. It exists because the
@@ -409,48 +412,87 @@ as_of sabotage                       2 parity tests fail (correct)
 margin stress case                   0 negative-cash days, gross 1.0000
 ```
 
-Nothing was committed.
+Committed as `d9a0538`. The suite has since grown to 127 tests across the
+follow-up review fixes in `4bad8d9`.
 
 ---
 
-## 7. Open decision: the Phase 3 gate
+## 7. Decided: the Phase 3 gate was rewritten
 
-**The gate as written is unfalsifiable, and this needs a decision before any
-Phase 3 number exists.**
+**Resolved 2026-09-12. The gate was changed before any Phase 3 number existed,
+and none has been computed since.** That ordering is the whole point — this
+section records it so the change stays auditable.
 
-The roadmap says: *net-of-cost Sharpe above ~0.4 across the full history.* On this
+### The problem with the original
+
+The roadmap said: *net-of-cost Sharpe above ~0.4 across the full history.* On this
 universe that is cleared at **0.87** by equal-weighting all 82 names and never
-trading. Even honest point-in-time RSP clears it at **0.58**. The gate cannot fail.
+trading. Even honest point-in-time RSP clears it at **0.58**. The gate could not
+fail, which means it was never a gate.
 
-There is a second, independent problem with it: 0.3–0.5 is the **long/short**
-figure from the momentum literature, whose benchmark is zero. It has been attached
-to a **long-only** strategy, whose benchmark is the universe. Those are not
-comparable quantities.
+A second, independent defect: 0.3–0.5 is the **long/short** figure from the
+momentum literature, whose benchmark is zero. It had been attached to a
+**long-only** strategy, whose benchmark is the universe. Those are not comparable
+quantities, and no threshold chosen for one transfers to the other.
 
-Recommended replacement — to be written into `roadmap.html` *before* Phase 3 runs:
+This was a deal-breaker for the gate, not for the project.
 
-1. **Primary, bias-cancelling:** information ratio of
+### What replaced it
+
+1. **Primary, bias-narrowing:** information ratio of
    `strategy − EqualWeightStrategy`, both net of costs on the identical panel,
-   **> 0.2**. This is the gate.
+   engine and cost model, **> 0.2**. This is the gate.
 2. **Secondary, kept as designed:** vol-targeted must measurably beat unscaled
-   momentum.
-3. **Absolute floor, if kept at all:** set at the measured equal-weight baseline's
-   net Sharpe — about **0.9** here, not 0.4 — and labelled "necessary, not
-   sufficient."
+   momentum. This is the actual test of the thesis.
+3. **Absolute floor:** the measured equal-weight baseline's net Sharpe — about
+   **0.87** here, not 0.4 — labelled *necessary, not sufficient*.
 
-Raising 0.4 to some larger number is not recommended: the bias magnitude has an
-error bar wider than any increment worth picking, and an absolute threshold stays
-wrong in one direction or the other depending on the decade.
+Raising 0.4 to some larger number was rejected: the bias magnitude has an error
+bar wider than any increment worth picking, and an absolute threshold stays wrong
+in one direction or the other depending on the decade.
 
-The machinery this needs is built (`summarize_relative`, and `--backtest` always
-running the baseline). **`docs/roadmap.html` was deliberately not edited** —
-changing a pre-committed gate is the project owner's call, and the honest window
-for it is now, before any Phase 3 result exists.
+The machinery this needs was already built — `summarize_relative`, and
+`--backtest` always running the same-universe baseline.
 
-Also pre-commit, per the subagent: *a passing Phase 3 is provisional until re-run
-on point-in-time data; the Phase 4 paper record is the first genuinely
-out-of-sample evidence this project will have.* The roadmap already says the
-second half — treat it as binding.
+### The word "bias-narrowing", deliberately
+
+Differencing against a same-universe baseline removes what the two portfolios
+*share*. It does not establish that survivorship is what was shared — the missing
+failed names would have changed each portfolio's selection differently. An
+information ratio computed this way is **active performance on a survivor-selected
+universe**, not a corrected number. `metrics.py` prints that caveat beside the
+figure for the same reason.
+
+So the pre-commitment stands and is now written into the roadmap as binding: *a
+passing Phase 3 is provisional until re-run on point-in-time data; the Phase 4
+paper record is the first genuinely out-of-sample evidence this project will have.*
+
+### What would actually fix it
+
+Point-in-time constituents plus delisted histories. `universe.py` already records
+why yfinance cannot supply them — no delisted coverage, and it silently serves
+recycled symbols (FB returns an ETF, BBBY returns Overstock's path), so splicing
+it in trades a bounded documented error for an unbounded one that looks like
+signal.
+
+| Option | Tier | What it fixes |
+|---|---|---|
+| Norgate Data | Retail-affordable | Point-in-time constituents *and* delisted histories — the usual first stop at this budget |
+| Sharadar | Above Norgate | Same, with fundamentals attached; worth it only if something downstream wants them |
+| CRSP | Institutional | The academic reference, priced for a desk |
+| Liquid futures or ETF set | Free — different bias | Survivorship structurally absent. A sanity check on whether the result depends on the selection, not a replacement |
+| Universe fixed as of 2005 | Free — partial | Still biased (the delisted series cannot be recovered), but the selection stops being made with knowledge of the outcome |
+
+The architecture already has the seam. `UniverseSpec.members_asof()` returns
+everything on every date and is a no-op waiting for a real membership table;
+`PricePanel.tradable_as_of` separately answers whether a name had a bar. Drop a
+point-in-time table into the first and nothing in the engine, the strategy or the
+weight path changes.
+
+One engine assumption pairs with it and will need attention the same day: a name
+whose bars stop is marked forward at its last close indefinitely and can never be
+sold. Harmless on survivors, wrong the moment delisted names arrive. It is written
+down in `engine.py` for that reason.
 
 ---
 
@@ -461,6 +503,12 @@ second half — treat it as binding.
   higher-volatility window against names measured over a full one.
 - Set `cash_annual_rate` deliberately. It defaults to 0, which understates any
   strategy holding meaningful cash — and vol targeting will hold a lot.
+- Declare `proposal_scale = "absolute"` on the vol-targeted strategy. That
+  machinery exists for exactly this case: vol-targeted weights come out as
+  fractions of NAV, so a sum of 0.7 is a deliberate 30% cash position — which a
+  naive normaliser would spend, silently, by scaling the book back to fully
+  invested. `target_weights` raises rather than defaulting, so the mistake cannot
+  be made by omission, only by declaring the wrong one.
 - Do not re-open Phase 1. The vol-forecast gate is a *relative* forecast-error
   comparison in which all four models score identical rows in the identical
   universe; survivorship does not contaminate the ranking. It does mean absolute

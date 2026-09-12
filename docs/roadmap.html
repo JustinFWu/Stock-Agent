@@ -389,6 +389,42 @@
     display: block;
     margin-bottom: 3px;
   }
+  .gate-line ol {
+    margin: 7px 0 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .gate-line li::marker { font-family: var(--mono); color: var(--gate); }
+  .gate-line .sub {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gate);
+    margin-right: 7px;
+  }
+  .phase.cleared .gate-line .sub,
+  .phase.cleared .gate-line li::marker { color: var(--accent); }
+
+  .console {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.55;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    padding: 16px 20px;
+    overflow-x: auto;
+    color: var(--ink-soft);
+    margin: 0;
+    white-space: pre;
+  }
+  .console b { color: var(--ink); font-weight: 600; }
+  .console .cmd { color: var(--ink-faint); }
 
   /* ---------- tables ---------- */
 
@@ -439,6 +475,7 @@
   .callout p { margin: 0; font-size: 0.95rem; color: var(--ink-soft); }
   .callout h3 { color: var(--gate); }
   td.num { white-space: nowrap; color: var(--ink); }
+  td small { color: var(--ink-faint); font-size: 0.82em; white-space: nowrap; }
   td.path { font-family: var(--mono); font-size: 0.82rem; white-space: nowrap; }
 
   .tag {
@@ -567,7 +604,7 @@
       <span><b>branch</b> feat/vol-targeted-momentum</span>
       <span><b>opened</b> 2026-08-07</span>
       <span><b>supersedes</b> cross-sectional ranking (no-go)</span>
-      <span><b>status</b> phases 0-1 cleared</span>
+      <span><b>status</b> phases 0-2 cleared &middot; phase 3 open</span>
     </div>
   </header>
 
@@ -578,8 +615,8 @@
     </div>
     <div class="prose">
       <p>
-        Forward returns on 71 US mega-caps are, as far as this repo can measure, unpredictable from
-        price history. That was tested properly and it failed properly. Volatility is a different
+        Forward returns on the 71 US mega-caps this repo tested are, as far as it can measure,
+        unpredictable from price history. That was tested properly and it failed properly. Volatility is a different
         animal: realized vol is strongly autocorrelated, so a forecast of next week's vol is a
         forecast that can actually be made &mdash; and it has direct economic value in deciding
         position size.
@@ -656,7 +693,7 @@
           </div>
           <dl class="kv">
             <dt>Deliverable</dt>
-            <dd>Split- and dividend-adjusted daily OHLCV for the 71-name universe, cached as parquet alongside the existing feature store.</dd>
+            <dd>Split- and dividend-adjusted daily OHLCV for the 82-name universe, cached as parquet alongside the existing feature store.</dd>
             <dt>Why here</dt>
             <dd>12&ndash;2 momentum burns twelve months on formation. Two years of data leaves roughly one year of testable backtest &mdash; not enough to conclude anything.</dd>
             <dt>Caveat</dt>
@@ -692,20 +729,27 @@
         </div>
       </article>
 
-      <article class="phase">
+      <article class="phase cleared">
         <div class="phase-num">2<small>infrastructure</small></div>
         <div class="phase-body">
-          <h3>Backtester with real costs</h3>
+          <div class="phase-title">
+            <h3>Backtester with real costs</h3>
+            <span class="cleared-badge">Cleared</span>
+          </div>
           <dl class="kv">
             <dt>Deliverable</dt>
             <dd>An event-driven backtest carrying commissions, spread, and a market-impact estimate. No-trade bands so that continuously resizing to hit an exact vol target doesn't churn away the benefit.</dd>
             <dt>Why here</dt>
             <dd>Nothing downstream can be evaluated without it, and most retail edges die entirely on costs. Building it before the strategy keeps the strategy honest.</dd>
+            <dt>As built</dt>
+            <dd>Decide after the close of day <i>t</i>, fill at the open of <i>t</i>+1 &mdash; a signal can never be traded at a price used to compute it. <code>src/backtest/</code> holds the engine, the cost model, portfolio accounting and metrics; <code>PricePanel.as_of</code> is the one look-ahead firewall.</dd>
           </dl>
           <div class="gate-line">
-            <b>Gate</b> One function produces both the backtest weights and the live weights,
-            enforced by a test asserting byte-identical output for a fixed date. If the paths
-            can drift, the backtest is fiction.
+            <b>Gate &mdash; met</b> One function produces both the backtest weights and the live
+            weights, enforced by a test asserting byte-identical output for a fixed date.
+            <code>target_weights()</code> is that function; <code>test_weight_parity.py</code>
+            compares SHA-256 digests of the serialised weights, with no tolerance. The risk limits
+            live in <code>config.py</code>, so neither caller holds its own copy.
           </div>
         </div>
       </article>
@@ -719,11 +763,39 @@
             <dd>12&ndash;2 momentum (formation t&minus;12 to t&minus;2, skipping the most recent month) &rarr; top-decile long-only selection &rarr; vol-targeted weights from a Ledoit&ndash;Wolf shrunk covariance &rarr; the hard risk layer.</dd>
             <dt>Why shrinkage</dt>
             <dd>Correlations spike in exactly the drawdowns you're sizing against. Naive inverse-vol weighting understates portfolio risk when it matters most; shrinkage is one scikit-learn call and it is the difference between a vol target that holds and one that blows through.</dd>
+            <dt>Before code</dt>
+            <dd>Three settings already carry notes in the source and are wrong at their current values.
+            <code>MIN_HISTORY_DAYS</code> rises 252 &rarr; ~273: a 12&ndash;2 formation window reaches back
+            thirteen months, so a name with exactly 252 bars would rank on a truncated, higher-vol window
+            against names measured over a full one. <code>cash_annual_rate</code> defaults to 0 and must be
+            set deliberately &mdash; vol targeting holds a lot of cash, and crediting it nothing understates
+            the strategy. And vol-targeted weights are <code>proposal_scale = "absolute"</code>, the case
+            that machinery was built for: a sum of 0.7 is a deliberate 30% cash position, which is exactly
+            what a naive normaliser would silently spend.</dd>
           </dl>
           <div class="gate-line">
-            <b>Gate</b> Net-of-cost Sharpe above ~0.4 across the full history, <i>and</i> vol targeting
-            must measurably improve risk-adjusted return over unscaled momentum. If scaling adds
-            nothing, the thesis is wrong and the sizing layer is decoration.
+            <b>Gate &mdash; rewritten 2026-09-12, before any Phase 3 number existed</b>
+            The original &mdash; net-of-cost Sharpe above ~0.4 &mdash; was unfalsifiable on this universe
+            and has been replaced. The reasoning is below, under <i>The gate that could not fail</i>.
+            <ol>
+              <li><span class="sub">Primary</span> Information ratio of the strategy against
+              <code>EqualWeightStrategy</code>, both net of costs on the identical panel, engine and cost
+              model: <span class="mono">&gt; 0.2</span>. Differencing removes what the two portfolios
+              share. This is the gate.</li>
+              <li><span class="sub">Secondary</span> Vol targeting must measurably improve risk-adjusted
+              return over unscaled momentum. Unchanged, and the actual test of the thesis: if scaling adds
+              nothing, the sizing layer is decoration.</li>
+              <li><span class="sub">Floor</span> Net Sharpe at or above the measured equal-weight
+              baseline &mdash; about <span class="mono">0.87</span> here, not 0.4. Necessary, never
+              sufficient: a strategy that cannot beat doing nothing on its own universe has not earned
+              an information ratio.</li>
+            </ol>
+          </div>
+          <div class="gate-line">
+            <b>And binding</b> A passing Phase 3 is <i>provisional</i> until re-run on point-in-time data.
+            None of the three tests above removes survivorship &mdash; they only narrow what it can
+            explain. The Phase 4 paper record is the first genuinely out-of-sample evidence this project
+            will ever have.
           </div>
         </div>
       </article>
@@ -736,7 +808,7 @@
             <dt>Deliverable</dt>
             <dd>A <code>Broker</code> interface &mdash; positions, account, submit, fills &mdash; with an Alpaca implementation behind it. Position reconciler, idempotent order state, scheduled unattended runs, monitoring and alerting.</dd>
             <dt>Broker order</dt>
-            <dd>Alpaca first: REST, cloud-hostable, paper built in, keys already in <code>config.py:35</code>. IBKR later behind the same interface, when its product breadth is actually needed.</dd>
+            <dd>Alpaca first: REST, cloud-hostable, paper built in, keys already in <code>config.py:45</code>. IBKR later behind the same interface, when its product breadth is actually needed.</dd>
             <dt>The real risk</dt>
             <dd>Not signal decay &mdash; a crash halfway through a rebalance. Design for resumption from any point, every time.</dd>
           </dl>
@@ -842,6 +914,175 @@
 
   <section>
     <div class="section-head">
+      <p class="eyebrow">Phase 2 result</p>
+      <h2>The machinery is trustworthy. The number it prints is not a result.</h2>
+    </div>
+    <p class="prose">
+      The gate was about code paths, not performance, and it is met: <code>target_weights()</code>
+      is the only way weights are formed, and <code>test_weight_parity.py</code> proves the backtest
+      and live paths agree byte for byte. What the engine prints when run on the placeholder
+      strategy is below.
+    </p>
+    <pre class="console"><span class="cmd">$ python pipeline.py --backtest --start 2006-01-01</span>
+
+=== Backtest: equal_weight on survivor-82 ===
+  period          2006-01-03 -&gt; 2026-08-06  (20.6y)
+  total return     1851.7%
+  CAGR              15.56%
+  ann vol           18.61%
+  <b>Sharpe              0.87</b>
+  max drawdown      -48.0%
+  Calmar              0.32
+  ann turnover         17%
+  cost drag /yr      0.00%
+  costs paid           379   over 186 trading days
+  rebalance              M   band 0.50%   max weight 10%
+  universe        survivor-82   point-in-time: NO   <b>names 76 -&gt; 82</b></pre>
+    <div class="prose">
+      <p>
+        <b>These numbers are a plumbing check.</b> The strategy is <code>EqualWeightStrategy</code>,
+        a parameterless placeholder that exists so the machinery can be exercised with no signal to
+        tune against it. Building the backtester first is what makes that possible: a backtester
+        written after the signal grows, one convenience at a time, into a machine for confirming
+        the signal.
+      </p>
+      <p>
+        <code>names 76 &rarr; 82</code> is the cheap tell for a survivor-only universe. A real one
+        loses names over twenty years. It never falls here because every name in it was chosen, in
+        2026, from the set that survived.
+      </p>
+    </div>
+
+    <div class="callout">
+      <h3>Six bugs that were latent on an equal-weight book and live on Phase 3's</h3>
+      <p>
+        Every one of these was found by review rather than by a failing number, because on a
+        never-trading equal-weight placeholder none of them moved the output much. Each is the kind
+        that produces a <i>plausible</i> curve rather than a crash, and each would have been load-bearing
+        the moment a vol-targeted strategy started resizing daily.
+      </p>
+      <p>
+        Buy scaling measured buying power against raw notional and ignored the costs that <i>are</i>
+        the shortfall &mdash; 525 days of unpriced margin, and a breached gross ceiling under stress.
+        A minimum commission does not scale with order size, so the naive fix still went cash-negative;
+        affordability is now solved by bisection. A missing open bar valued a holding at zero, collapsing
+        NAV and selling down every healthy position &mdash; and the first fix for that read
+        <i>today's</i> close, which is not knowable at today's open: measured, one missing open turned
+        another name's order into a 125-share sale. Constraints clipped before scaling, collapsing any
+        conviction-scored strategy to equal weight with its signal silently deleted. Turnover and cost
+        drag divided by mean NAV, understating both by ~18% on a compounding curve. And derived feature
+        caches were trusted whenever the raw manifest still named the same window, so a
+        <code>--refetch</code> reused features built from bars that no longer existed.
+      </p>
+      <p>
+        All six are fixed, each with a regression test; the suite stands at 127. The reason to record
+        them here is the pattern, not the fixes: a backtester validated only against a strategy that
+        barely trades is not validated.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">The binding constraint</p>
+      <h2>Survivorship, and the gate it quietly broke.</h2>
+    </div>
+
+    <div class="callout">
+      <h3>The gate that could not fail</h3>
+      <p>
+        The Phase 3 gate as originally written &mdash; <i>net-of-cost Sharpe above ~0.4 across the
+        full history</i> &mdash; is passable by something with no edge at all. Equal-weighting all 82
+        names and never trading clears it at <b>0.87</b>. Even honest point-in-time RSP clears it at
+        <b>0.58</b>. A gate that cannot fail is not a gate.
+      </p>
+      <p>
+        There is a second, independent defect. The 0.3&ndash;0.5 figure from the momentum literature
+        is a <b>long/short</b> number, whose benchmark is zero. It was attached to a <b>long-only</b>
+        strategy, whose benchmark is the universe. Those are not comparable quantities, and no
+        threshold picked for one means anything applied to the other.
+      </p>
+      <p>
+        This is a deal-breaker for the gate, not for the project &mdash; and the honest moment to say
+        so is now, before a Phase 3 number exists. The replacement is in the Phase 3 card above.
+      </p>
+    </div>
+
+    <p class="prose">
+      The measurement, for scale: equal-weight daily-rebalanced over this universe returns 16.8%/yr
+      at Sharpe 0.91 and &minus;47% max drawdown, against 10.1%/yr, Sharpe 0.58 and &minus;60% for RSP,
+      a point-in-time equal-weight S&amp;P 500. Roughly 6.7pp/yr and 0.33 of Sharpe. That is an
+      indication of scale and <i>not</i> an isolated measurement of survivorship &mdash; the two
+      portfolios differ in composition and rebalancing as well as in hindsight. It is why every
+      <code>--backtest</code> run computes a same-universe baseline by construction rather than by
+      discipline.
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Option</th><th>Tier</th><th>What it actually fixes</th></tr>
+        </thead>
+        <tbody>
+          <tr class="highlight">
+            <td>Norgate Data</td>
+            <td>Retail-affordable</td>
+            <td>Point-in-time constituents <i>and</i> delisted price histories &mdash; the usual first
+            stop at this budget, and enough to make an absolute Sharpe mean something.</td>
+          </tr>
+          <tr>
+            <td>Sharadar</td>
+            <td>Above Norgate</td>
+            <td>Same two properties with broader fundamentals attached. Worth it only if something
+            downstream wants the fundamentals.</td>
+          </tr>
+          <tr>
+            <td>CRSP</td>
+            <td>Institutional</td>
+            <td>The academic reference. Correct, and priced for a desk rather than a person.</td>
+          </tr>
+          <tr>
+            <td>Liquid futures or ETF set</td>
+            <td>Free &mdash; different bias</td>
+            <td>Run the same code where survivorship is <i>structurally</i> absent, as a sanity check
+            rather than a replacement. Different universe, different anomaly strength; what it tests
+            is whether the result depends on the selection.</td>
+          </tr>
+          <tr>
+            <td>Universe fixed as of 2005</td>
+            <td>Free &mdash; partial</td>
+            <td>The cheap mitigation if buying data is not on. Still biased &mdash; the delisted price
+            series cannot be recovered, so failed names are absent rather than losing &mdash; but the
+            selection stops being made with knowledge of the outcome.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        None of this needs an architecture change, which was the point of building the seam early.
+        <code>UniverseSpec.members_asof()</code> returns everything on every date today and is a no-op
+        waiting for a real membership table; <code>PricePanel.tradable_as_of</code> answers the separate
+        question of whether a name had a bar, off the price data. Drop a point-in-time table into the
+        first and nothing in the engine, the strategy or the weight path is touched.
+      </p>
+      <p>
+        What will need attention is the engine assumption that pairs with it: a name whose bars stop is
+        currently marked forward at its last close indefinitely and can never be sold. Harmless on
+        survivors. A real problem the day delisted names arrive, and it is written down in
+        <code>engine.py</code> for that reason.
+      </p>
+      <p>
+        yfinance cannot supply any of it. It has no delisted coverage and silently serves recycled
+        symbols &mdash; FB returns an ETF, BBBY returns Overstock's path &mdash; so splicing it in
+        trades a bounded, documented error for an unbounded one that looks like signal.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
       <p class="eyebrow">Gates</p>
       <h2>Written down before the results exist.</h2>
     </div>
@@ -867,8 +1108,8 @@
           </tr>
           <tr>
             <td class="num">3</td>
-            <td>Net-of-cost Sharpe, full history</td>
-            <td class="num">&gt; 0.4</td>
+            <td>Information ratio vs same-universe equal weight, net of costs <small>&mdash; primary</small></td>
+            <td class="num">&gt; 0.2</td>
             <td>Reconsider universe before reconsidering model</td>
             <td><span class="tag retool">Pending</span></td>
           </tr>
@@ -877,6 +1118,13 @@
             <td>Vol-targeted vs unscaled momentum</td>
             <td class="num">must improve</td>
             <td>Thesis is wrong &mdash; stop and reassess</td>
+            <td><span class="tag retool">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td>Net Sharpe vs the measured baseline <small>&mdash; necessary, not sufficient</small></td>
+            <td class="num">&ge; 0.87</td>
+            <td>Below the do-nothing baseline is a no-go on its own</td>
             <td><span class="tag retool">Pending</span></td>
           </tr>
           <tr>
@@ -914,7 +1162,7 @@
           </tr>
           <tr>
             <td><span class="tag keep">Keep</span></td>
-            <td class="path">technical.py:16,71</td>
+            <td class="path">technical.py:13,20</td>
             <td><code>add_returns</code> and <code>add_atr</code> feed the vol estimator directly.</td>
           </tr>
           <tr>
@@ -1045,6 +1293,8 @@
   <footer>
     Living document on branch feat/vol-targeted-momentum. Gates are pre-committed &mdash;
     amend them only before a result is known, never after.
+    <br>Amended 2026-09-12: the Phase 3 gate, replaced because the original was unfalsifiable on this
+    universe. No Phase 3 number existed at the time of the change, and none has been computed since.
   </footer>
 
 </div>

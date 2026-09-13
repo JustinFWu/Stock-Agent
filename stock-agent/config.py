@@ -47,7 +47,7 @@ NO_TRADE_BAND = 0.005    # ignore drift smaller than 50bp of NAV
 
 # A book of fewer than MAX_GROSS/MAX_WEIGHT names cannot reach full investment: the per-name
 # cap truncates it and the leftover reads as a deliberate cash position it never chose.
-# Measured at the decile, that silently held 20% cash and cost momentum 0.19 of information
+# Measured at the decile, that silently held 20% cash and cost momentum 0.12 of information
 # ratio against the same-universe baseline.
 MIN_SELECTED_NAMES = math.ceil(MAX_GROSS / MAX_WEIGHT)
 

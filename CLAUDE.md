@@ -299,3 +299,90 @@ Read the full repo, then made two consistency fixes and produced the Phase 4 ske
   worsened; IR tracked beta. The gate was **not** amended — that window closed when the
   first number existed. Any future re-run needs a beta control beside the IR: an appraisal
   ratio on beta-neutralised active returns, or a joint requirement that Sharpe improve too.
+
+---
+
+## Session record — 2026-09-15
+
+Built steps 1 and 2 of the Phase 4 sketch above: the broker vocabulary with a crash-capable
+fake, then the write-ahead order log and recovery. 164 tests → 224, `ruff` clean. Nothing
+outside `src/execution/` and `tests/` was touched — no existing module changed.
+
+### Build order: deliberately not the sketch's arrow
+
+The diagram is runtime data flow, not build order. Top-down would put the Reconciler first,
+against a Broker that does not exist — so its interface gets discovered as an ad-hoc test
+stub rather than decided, and the `submit(qty, side)` argument above is worth nothing if the
+first Broker-shaped object in the repo is a dict some reconciler test happened to need.
+
+It would also build the cheap parts first. `plan_trades` (`portfolio.py:98`) is already most
+of a reconciler — target vs current, a no-trade band, forced exits, `blocked` tracking — and
+the veto is a pure function over a post-trade book. Neither can force a rewrite of anything
+else. The two things that can are the type vocabulary and the crash-recovery contract, so
+those went first, which is what "Build this first" already said.
+
+### Step 1 — `src/execution/broker.py`, `src/execution/fake.py`
+
+The vocabulary: `Side`, `OrderIntent`, `Account`, `OrderAck`, `OrderStatus`, `BrokerFill`,
+`OrderState`, `BrokerError`, `DuplicateOrderError`, and the `Broker` Protocol as sketched.
+
+- The two `submit` signatures debated above are not in tension: the intent *carries* the
+  side, so `submit(intent)` and `submit(ticker, qty, side)` are the same decision. `qty` is
+  always positive and direction lives in `Side`.
+- `client_order_id` is a **computed property**, `2026-09-15:AAA:<12 hex>`, not a stored
+  field — "same session, same intent, same id" has to be structural, not a discipline each
+  caller remembers.
+- **The digest covers `qty`, so the id alone does not protect a re-sized order.** A recovered
+  session that re-sizes a name by one share submits again. Pinning the id to `session:ticker`
+  would break legitimate retries after a partial, so the qty stays in and the sketch's
+  ordering rule — recovery strictly before generation — is what actually closes it. Recorded
+  in the comment on the property so the id is not mistaken for the whole defence.
+- `qty` is quantised to `QTY_PRECISION = 6` in `__post_init__`, not only inside the digest,
+  so the number hashed and the number sent cannot drift. Non-finite and non-positive are
+  refused, NaN being the one that passes `> 0` by failing the comparison.
+- `FakeBroker` takes `Fault(method, point, ticker)`. `FailPoint.AFTER_ACCEPT` fires after the
+  order is recorded and the book has moved — the window a paper account will not reproduce.
+  It is the *remote* broker, so it survives our restart, which is how a restart is simulated.
+- The fake does **not** enforce long-only and will short a sell it cannot cover. Faithful to a
+  margin account, and it is what makes a later veto test prove something about the veto.
+
+### Step 2 — `src/execution/store.py`, `src/execution/recovery.py`
+
+- **Two state machines, kept separate.** `OrderState` is what the venue says; `LocalState`
+  (`INTENDED → SUBMITTED → RESOLVED`, plus `ABANDONED`) is what our side knows. The gap
+  between them is the whole problem, so they are not one shared enum.
+- Append-only JSONL, fsynced per event. A crash during a snapshot rewrite loses the whole
+  file at exactly the moment the file is the only thing that knows an order was sent.
+- One fold (`_apply`) serves both the live path and the replay, so the in-memory view after a
+  write and the view after a restart cannot disagree.
+- `submit_intent` writes, then sends. On `BrokerError` it records **nothing** and re-raises:
+  the outcome is unknown, and writing "failed" is how a filled order becomes invisible. On
+  `DuplicateOrderError` it calls `order_status` rather than assuming either outcome.
+- **`recover` is also the fill poll.** Steps 3 and 11 are the same operation, so they are one
+  function — two implementations is how the startup path and the end-of-session path come to
+  disagree about what a partial means.
+- A `None` status is safe only without evidence the broker held it, so `OrderRecord` carries
+  `known_to_broker`, set by an ack *or* any status that came back. An acked order the broker
+  no longer knows raises: there is no honest inference available.
+- A still-working order is neither resolved nor abandoned. `RecoveryReport.blocked_tickers`
+  names it and the reconciler decides — the log does not hold policy.
+- Two guards beyond the sketch: a torn final line is repaired on open (appending after a
+  fragment would splice onto it and destroy a line that parsed before), and `_apply` checks
+  each replayed intent still produces the id that was stored. Because the id is derived,
+  changing `QTY_PRECISION` or the digest silently re-keys every existing log and the next
+  session resubmits the lot; that is now a refusal to start.
+
+### Left open, deliberately
+
+- **Where weights become shares.** `live_target_weights()` returns a weight Series and the
+  broker takes `qty`; in the backtest that conversion is inside `plan_trades`, against
+  `nav(marks)` with the raw/marks distinction that function is careful about. Live, NAV comes
+  from `broker.account().equity`. Nothing in steps 1-2 forces the choice, and it is the
+  likeliest source of a silent live/backtest divergence — the exact failure
+  `test_weight_parity.py` exists to catch. It is step 3's first decision.
+- **"Recovery before generation" is not yet structural.** `recover` reports a working order
+  and leaves the response to the caller, so the ordering still lives in a comment until the
+  session runner exists. Worth enforcing in code when it does.
+- The status table at the top of this file still reads "next — nothing built" for Phase 4.
+  Left as-is pending a deliberate call on what "delivered" means for a phase with a
+  30-session gate and no session runner yet.

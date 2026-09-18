@@ -76,9 +76,13 @@ class Portfolio:
     def nav(self, prices: pd.Series) -> float:
         return self.cash + self.position_value(prices)
 
-    def weights(self, prices: pd.Series) -> pd.Series:
+    def weights(self, prices: pd.Series, nav: float | None = None) -> pd.Series:
         # Sums to less than 1 by the cash fraction.
-        nav = self.nav(prices)
+
+        # `nav` is injectable for the live path only, where the broker's reported equity is
+        # the authority and our marks are an estimate of it. Backtest callers pass nothing
+        # and get the self-consistent figure, because there is no external authority to ask.
+        nav = self.nav(prices) if nav is None else float(nav)
         if nav <= 0:
             return pd.Series(dtype=float)
         held = {t: q * _price_or_zero(prices, t) / nav for t, q in self.shares.items() if q != 0}
@@ -104,6 +108,7 @@ def plan_trades(
     no_trade_band: float,
     exit_removed: bool = True,
     only: frozenset[str] | None = None,
+    nav: float | None = None,
 ) -> TradePlan:
     # Two price vectors, and the distinction is load-bearing. `prices` are the raw bars a
     # trade would execute at; `marks` are valuation prices carried forward when a bar is
@@ -112,11 +117,15 @@ def plan_trades(
     # Sizing against raw prices would value a halted holding at zero, drop NAV by its full
     # weight, then sell down every *healthy* position to hit its share of the smaller
     # portfolio — fake loss, fake recovery tomorrow, real costs on a trade nobody wanted.
-    nav = portfolio.nav(marks)
+    # `nav` overrides what the marks imply, and only the live reconciler passes it: there
+    # the broker's equity is the authority and our marks are the estimate. Both the current
+    # weights and the share conversion below use the same figure, or `drift` would be a
+    # difference between two fractions of two different portfolios.
+    nav = portfolio.nav(marks) if nav is None else float(nav)
     if nav <= 0:
         return TradePlan(deltas=pd.Series(dtype=float))
 
-    current = portfolio.weights(marks)
+    current = portfolio.weights(marks, nav=nav)
     names = sorted(set(target.index) | set(current.index))
     # `only` keeps a retry surgical. Re-planning the whole target would drag every position
     # that has since drifted back through the band on a day the strategy never asked to

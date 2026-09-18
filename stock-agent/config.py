@@ -9,6 +9,14 @@ RAW_DIR = DATA_DIR / "raw"
 FEATURES_DIR = DATA_DIR / "features"
 MODELS_DIR = ROOT / "models" / "saved"
 
+# Operational state, as opposed to market data: the write-ahead order log and the kill
+# switch. Separated because these two files are the only things that survive a crash
+# knowing what the last session did, and a `--rebuild` of the feature cache must never
+# be able to reach them.
+STATE_DIR = DATA_DIR / "state"
+ORDER_LOG_PATH = STATE_DIR / "orders.jsonl"
+KILL_SWITCH_PATH = STATE_DIR / "kill_switch.json"
+
 # A fixed date rather than a yfinance `period`: 12-2 momentum burns twelve months on
 # formation, yfinance has no "20y" period string, and a fixed date keeps rebuilds
 # reproducible instead of sliding with today.
@@ -64,6 +72,19 @@ CASH_ANNUAL_RATE = 0.02
 # last March produces confident stale weights forever and a routine --fetch skips it.
 MAX_LIVE_STALENESS_DAYS = 4   # a Friday close is still fresh the following Tuesday
 MIN_LIVE_COVERAGE = 0.8       # fraction of the universe that must have a bar that session
+
+# The drawdown kill switch, measured against the broker's own equity high-water mark and
+# not our marks. Not a tuning knob and not a stop-loss: it is the level at which "something
+# is wrong with the system" becomes more likely than "the market moved". Vol-targeted
+# momentum's worst measured drawdown over 17.7 years was -15.8% and the equal-weight
+# baseline's was -32.8%, so 20% sits outside what the book being run is known to do while
+# staying well inside what its own universe has done.
+MAX_DRAWDOWN = 0.20
+
+# How far the NAV implied by our marks may sit from the broker's reported equity before the
+# two are treated as describing different portfolios. Wide enough to absorb a stale close
+# against a live mark, narrow enough that a missing or unknown position shows up.
+NAV_RECONCILIATION_TOLERANCE = 0.005
 
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")

@@ -4,10 +4,11 @@ A research pipeline for a volatility-targeted equity strategy: fetch adjusted
 daily bars, forecast realised volatility, and run a cost-aware event-driven
 backtest against a same-universe baseline.
 
-It does **not** trade. Nothing here connects to a broker, places an order, or
-holds a position. The live path stops at a target weight vector, deliberately —
-see `src/strategy/live.py`. A broker interface is Phase 4 of the roadmap, and the
-venue chosen there is Alpaca, not Interactive Brokers.
+It does **not** trade. There is no venue adapter: the only `Broker` implementation
+in the repo is `FakeBroker`, a test double, so nothing here can reach a real
+account. Phase 4 is building the machinery that would — the order vocabulary, the
+write-ahead log, reconciliation, the kill switch and the pre-trade veto — and the
+venue chosen for it is Alpaca, not Interactive Brokers.
 
 The full build plan, the pre-committed gates, and the results of each phase are in
 [`docs/roadmap.html`](docs/roadmap.html). The Phase 2 backtester and the Phase 3
@@ -23,7 +24,7 @@ strategy run have their own write-ups in
 | 1 | Volatility forecast, gated against EWMA and HAR-RV on QLIKE and RMSE | gate passed |
 | 2 | Cost-aware event-driven backtester; one weight path for backtest and live | gate passed |
 | 3 | 12-2 momentum with volatility-targeted sizing | **gate failed** |
-| 4 | Broker interface and monitoring | not started |
+| 4 | Broker interface and monitoring | in progress — gate pending |
 
 Phase 3 is built and run, and it failed its pre-committed gate. 12-2 momentum reached
 an information ratio of −0.53 against the same-universe equal-weight baseline where the
@@ -32,6 +33,15 @@ drawdown −26.7% to −15.8% — without improving risk-adjusted return. The wo
 including two defects the run exposed and a demonstrated hole in the gate itself, is in
 `docs/phase3-strategy.md`. Phase 4 proceeds regardless: its gate is thirty clean
 unattended sessions, an operations test that never depended on having an edge.
+
+Phase 4 is under way and its gate is untouched, because nothing has run unattended
+yet. Built so far: the broker vocabulary and Protocol, a crash-capable fake, the
+write-ahead order log and crash recovery, position reconciliation against the
+broker's own book, a persisted drawdown kill switch, and the pre-trade veto. Still
+missing: the Alpaca adapter, the session runner, and monitoring. **Passing Phase 4
+is a plumbing result and is not permission for live capital** — with Phase 3 failed
+there is no measured edge for the plumbing to trade, and that guardrail was written
+into the phase card before it became inconvenient.
 
 Read any absolute performance figure from this repo with the survivorship caveat
 attached. The universe is today's large caps, so the names that failed between 2005
@@ -105,6 +115,7 @@ stock-agent/
     models/            the volatility forecaster and its walk-forward gate
     strategy/          weight formation — one path for backtest and live
     backtest/          the event-driven engine, costs, portfolio accounting, metrics
+    execution/         Phase 4 — broker interface, order log, reconciliation, the veto
   tests/
 docs/                  roadmap, the Phase 2 and Phase 3 write-ups, and the code review
 ```

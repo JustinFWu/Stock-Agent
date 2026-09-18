@@ -184,5 +184,3 @@ Verification performed:
 - Full model training, fresh network downloads, and broker operations were not run. Historical numerical claims in the roadmap were not independently re-estimated.
 
 Summary: **17 findings: 4 P1, 10 P2, and 3 P3.** Fix time ordering, fixed-fee affordability, and cache provenance first; add deterministic regression coverage for those failures and Phase 1 before relying on the existing green suite. No source fixes were applied as part of this review.
-
-I love hot dogs

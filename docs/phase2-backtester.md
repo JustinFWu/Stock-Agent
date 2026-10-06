@@ -26,18 +26,18 @@ resizing to hit an exact vol target doesn't churn away the benefit.*
 
 | File | Responsibility |
 |---|---|
-| `src/data/panel.py` | Aligned wide OHLCV panel. `as_of()` truncation is the single look-ahead firewall; `tradable_as_of()` reads eligibility off the price data itself. |
-| `src/backtest/costs.py` | Commission, half-spread, square-root market impact. Presets: `ALPACA_COSTS`, `PESSIMISTIC_COSTS`, `ZERO_COSTS`. |
-| `src/backtest/portfolio.py` | Cash-and-shares accounting through one mutation point, no-trade bands, cash-constrained execution. |
-| `src/backtest/engine.py` | The daily loop and `BacktestResult`. |
-| `src/backtest/metrics.py` | Absolute statistics plus `summarize_relative` (excess CAGR, tracking error, information ratio, beta). |
-| `src/strategy/weights.py` | `target_weights()` — the shared weight-formation path. Risk limits live here. |
-| `src/strategy/live.py` | The live-side caller. Deliberately thin. |
+| `stock_agent/data/panel.py` | Aligned wide OHLCV panel. `as_of()` truncation is the single look-ahead firewall; `tradable_as_of()` reads eligibility off the price data itself. |
+| `stock_agent/backtest/costs.py` | Commission, half-spread, square-root market impact. Presets: `ALPACA_COSTS`, `PESSIMISTIC_COSTS`, `ZERO_COSTS`. |
+| `stock_agent/backtest/portfolio.py` | Cash-and-shares accounting through one mutation point, no-trade bands, cash-constrained execution. |
+| `stock_agent/backtest/engine.py` | The daily loop and `BacktestResult`. |
+| `stock_agent/backtest/metrics.py` | Absolute statistics plus `summarize_relative` (excess CAGR, tracking error, information ratio, beta). |
+| `stock_agent/strategy/weights.py` | `target_weights()` — the shared weight-formation path. Risk limits live here. |
+| `stock_agent/strategy/live.py` | The live-side caller. Deliberately thin. |
 | `tests/` | 47 tests. |
 
 ### Changed
 
-- `src/data/universe.py` — rewritten around `UniverseSpec` (see §4).
+- `stock_agent/data/universe.py` — rewritten around `UniverseSpec` (see §4).
 - `config.py` — portfolio construction limits, shared by backtest and live.
 - `pipeline.py` — `--backtest` entry point, always runs a baseline alongside.
 - `requirements.txt` — added `pytest`.
@@ -104,7 +104,7 @@ Pre-committed wording: *one function produces both the backtest weights and the
 live weights, enforced by a test asserting byte-identical output for a fixed date.
 If the paths can drift, the backtest is fiction.*
 
-**Met.** `target_weights()` in `src/strategy/weights.py` is the only path.
+**Met.** `target_weights()` in `stock_agent/strategy/weights.py` is the only path.
 `run_backtest` calls it per rebalance; `live_target_weights` calls it for
 production. Risk limits (`MIN_HISTORY_DAYS`, `MAX_WEIGHT`, `MAX_GROSS`,
 `NO_TRADE_BAND`) live in `config.py` so neither caller holds its own copy.
@@ -191,7 +191,7 @@ manufactures the appearance of a point-in-time universe with none of the
 substance, doubles the maintenance surface, and forks the very path the Phase 2
 gate exists to keep single.
 
-Implemented as `UniverseSpec` in `src/data/universe.py`:
+Implemented as `UniverseSpec` in `stock_agent/data/universe.py`:
 
 - `members_asof(date)` returns everything for every date, because this universe
   has no membership history. That is the honest behaviour, not a stub — it is the

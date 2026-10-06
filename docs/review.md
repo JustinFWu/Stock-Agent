@@ -1,3 +1,8 @@
+> **Note added 2026-10-06.** This is the transcript of an earlier review, kept as written.
+> Every path in it predates the Phase 4 repository flatten: `stock-agent/src/x.py` is now
+> `stock_agent/x.py`, and the line numbers were accurate when the review was run rather than
+> now. The findings are what this file is for; the pointers need translating.
+
 ##################################################################
 Human:
 

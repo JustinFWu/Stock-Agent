@@ -1,0 +1,114 @@
+# Hand-computed assertions rather than snapshots: a snapshot locks in whatever the code did the
+# day it was written, including the bug. The property that matters most is the last — every
+# feature must be a function of the current bar and earlier ones only.
+
+
+import numpy as np
+import pandas as pd
+import pytest
+from conftest import make_bars
+
+from stock_agent.config import EWMA_LAMBDA, TRADING_DAYS
+from stock_agent.features.technical import build_features
+from stock_agent.features.volatility import build_volatility_features
+
+
+def constant_move_bars(periods: int = 60, move: float = 0.01) -> pd.DataFrame:
+    # Alternating rather than constant keeps the price from running away over sixty sessions while
+    # leaving every squared return identical, making the expected realised vol a closed form.
+    dates = pd.bdate_range("2020-01-01", periods=periods)
+    signs = np.where(np.arange(periods) % 2 == 0, 1.0, -1.0)
+    signs[0] = 0.0  # the first bar has no prior close, so it contributes no return
+    close = 100.0 * np.exp(np.cumsum(signs * move))
+
+    return pd.DataFrame(
+        {"Open": close, "High": close, "Low": close, "Close": close,
+         "Volume": np.full(periods, 1e6)},
+        index=dates,
+    )
+
+
+def test_realized_vol_is_the_annualised_root_mean_square_return():
+    # rv_5d over returns of a fixed magnitude must be exactly |r| * sqrt(252).
+    move = 0.01
+    features = build_volatility_features(constant_move_bars(move=move))
+
+    expected = move * np.sqrt(TRADING_DAYS)
+    assert features["rv_5d"].iloc[-1] == pytest.approx(expected)
+    assert features["rv_21d"].iloc[-1] == pytest.approx(expected)
+
+
+def test_ewma_vol_follows_the_riskmetrics_recursion():
+    # This feature is also the EWMA baseline the model must beat. If it drifts, the gate moves with
+    # it and the model looks better or worse for a reason that has nothing to do with the model.
+    bars = make_bars(periods=120, seed=3)
+    features = build_volatility_features(bars)
+
+    squared = (np.log(bars["Close"] / bars["Close"].shift(1)) ** 2).dropna().to_numpy()
+    # `adjust=False` seeds the recursion with the first observation rather than with
+    # zero, so the hand-rolled version has to start there too or it trails by the
+    # weight the seed never lost.
+    variance = squared[0]
+    for value in squared[1:]:
+        variance = EWMA_LAMBDA * variance + (1 - EWMA_LAMBDA) * value
+
+    assert features["ewma_vol"].iloc[-1] == pytest.approx(np.sqrt(variance * TRADING_DAYS))
+
+
+def test_range_estimators_stay_positive():
+    # Garman-Klass is unbiased, not non-negative, which is why the floor is applied after the window
+    # average. A negative variance would become NaN under the square root and silently delete rows.
+    features = build_volatility_features(make_bars(periods=200, seed=5))
+
+    for column in ("park_5d", "park_21d", "gk_5d", "gk_21d", "gk_63d"):
+        values = features[column].dropna()
+        assert not values.empty
+        assert (values > 0).all(), f"{column} produced a non-positive volatility"
+
+
+def test_vol_ratios_compare_the_windows_they_name():
+    features = build_volatility_features(make_bars(periods=200, seed=6))
+    row = features.iloc[-1]
+
+    assert row["vol_ratio_5_21"] == pytest.approx(row["rv_5d"] / row["rv_21d"])
+    assert row["vol_ratio_21_63"] == pytest.approx(row["rv_21d"] / row["rv_63d"])
+
+
+def test_gap_measures_the_open_against_the_previous_close():
+    bars = make_bars(periods=30, seed=7)
+    features = build_features(bars)
+
+    expected = (bars["Open"].iloc[5] - bars["Close"].iloc[4]) / bars["Close"].iloc[4]
+    assert features["gap"].iloc[5] == pytest.approx(expected)
+
+
+def test_atr_pct_normalises_atr_by_price():
+    features = build_features(make_bars(periods=60, seed=8))
+    row = features.iloc[-1]
+    assert row["atr_pct"] == pytest.approx(row["atr"] / row["Close"])
+
+
+def test_close_position_is_undefined_on_a_zero_range_bar():
+    # Letting the division through produces an infinity, which survives `dropna` and reaches the
+    # model — the exact class of value `prepare` now rejects.
+    bars = make_bars(periods=20, seed=9)
+    flat = bars.index[10]
+    bars.loc[flat, ["Open", "High", "Low", "Close"]] = 100.0
+
+    features = build_features(bars)
+    assert pd.isna(features.loc[flat, "close_position"])
+    assert np.isfinite(features["close_position"].dropna()).all()
+
+
+def test_no_feature_reads_a_future_bar():
+    # Features are built twice — full history, then truncated — and every value on or before the cut
+    # must match. A single forward-looking window (a centred mean, a shift(-1)) breaks this and
+    # would otherwise only show up as a suspiciously good validation score.
+    bars = make_bars(periods=300, seed=11)
+    cutoff = bars.index[200]
+
+    full = build_volatility_features(build_features(bars))
+    truncated = build_volatility_features(build_features(bars.loc[:cutoff]))
+
+    columns = [c for c in truncated.columns if c not in ("Open", "High", "Low", "Close", "Volume")]
+    pd.testing.assert_frame_equal(full.loc[:cutoff, columns], truncated[columns])

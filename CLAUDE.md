@@ -144,7 +144,7 @@ that it was written first.
                          FakeBroker EXISTS - fake.py
 ```
 
-No session runner yet, so nothing in `src/` performs the sequence end to end.
+No session runner yet, so nothing in `stock_agent/` performs the sequence end to end.
 `tests/test_execution_chain.py` threads it by hand and is where the claim that the pieces
 compose is actually pinned.
 
@@ -189,8 +189,8 @@ thirty sessions of tests.
 line is: do not spend an extra keyword to actively assert long-only where staying neutral
 is free. Widening the enum later is cheap; changing what the arguments *mean* is not.
 
-Relevant if long/short ever arrives: long-only is currently baked into `weights.py:122`
-(drops non-positive weights) and `portfolio.py:175-181` (splits sells from buys with
+Relevant if long/short ever arrives: long-only is currently baked into `weights.py:119`
+(drops non-positive weights) and `portfolio.py:181-194` (splits sells from buys with
 cash-only affordability logic).
 
 ### Reconciliation
@@ -286,7 +286,7 @@ boundary lives in the code, not in intent.
 
 Read the full repo, then made two consistency fixes and produced the Phase 4 sketch above.
 
-**Read:** `docs/roadmap.html` in full, all of `src/`, `config.py`, `pipeline.py`, the three
+**Read:** `docs/roadmap.html` in full, all of `stock_agent/`, `config.py`, `pipeline.py`, the three
 `docs/*.md` write-ups, and CI. Ran the suite (164 passed) and `ruff` (clean).
 
 **Fixed — stale documentation contradicting the code and the write-ups:**
@@ -324,7 +324,7 @@ Read the full repo, then made two consistency fixes and produced the Phase 4 ske
 
 Built steps 1 and 2 of the Phase 4 sketch above: the broker vocabulary with a crash-capable
 fake, then the write-ahead order log and recovery. 164 tests → 224, `ruff` clean. Nothing
-outside `src/execution/` and `tests/` was touched — no existing module changed.
+outside `stock_agent/execution/` and `tests/` was touched — no existing module changed.
 
 ### Build order: deliberately not the sketch's arrow
 
@@ -333,13 +333,13 @@ against a Broker that does not exist — so its interface gets discovered as an 
 stub rather than decided, and the `submit(qty, side)` argument above is worth nothing if the
 first Broker-shaped object in the repo is a dict some reconciler test happened to need.
 
-It would also build the cheap parts first. `plan_trades` (`portfolio.py:98`) is already most
+It would also build the cheap parts first. `plan_trades` (`portfolio.py:99`) is already most
 of a reconciler — target vs current, a no-trade band, forced exits, `blocked` tracking — and
 the veto is a pure function over a post-trade book. Neither can force a rewrite of anything
 else. The two things that can are the type vocabulary and the crash-recovery contract, so
 those went first, which is what "Build this first" already said.
 
-### Step 1 — `src/execution/broker.py`, `src/execution/fake.py`
+### Step 1 — `stock_agent/execution/broker.py`, `stock_agent/execution/fake.py`
 
 The vocabulary: `Side`, `OrderIntent`, `Account`, `OrderAck`, `OrderStatus`, `BrokerFill`,
 `OrderState`, `BrokerError`, `DuplicateOrderError`, and the `Broker` Protocol as sketched.
@@ -364,7 +364,7 @@ The vocabulary: `Side`, `OrderIntent`, `Account`, `OrderAck`, `OrderStatus`, `Br
 - The fake does **not** enforce long-only and will short a sell it cannot cover. Faithful to a
   margin account, and it is what makes a later veto test prove something about the veto.
 
-### Step 2 — `src/execution/store.py`, `src/execution/recovery.py`
+### Step 2 — `stock_agent/execution/store.py`, `stock_agent/execution/recovery.py`
 
 - **Two state machines, kept separate.** `OrderState` is what the venue says; `LocalState`
   (`INTENDED → SUBMITTED → RESOLVED`, plus `ABANDONED`) is what our side knows. The gap
@@ -416,7 +416,7 @@ Closed the three items the previous session left open, built the two risk contro
 roadmap's architecture names, and built step 3. 224 tests → 286, `ruff` clean, byte-compile
 clean, `--backtest` still runs end to end on real bars.
 
-### Step 3 — `src/execution/reconcile.py`
+### Step 3 — `stock_agent/execution/reconcile.py`
 
 **Where weights become shares, decided: NAV is `broker.account().equity`.** The venue is the
 one that will settle the trade, and it is the same rule as positions — the broker is the
@@ -451,7 +451,7 @@ is the checkable form of the rule — not "did someone call `recover`", which ca
 asked, but "is the log in the state a completed recovery leaves behind". It was a comment
 since 2026-09-15; it is a `ValueError` now.
 
-### The drawdown kill switch — `src/execution/killswitch.py`
+### The drawdown kill switch — `stock_agent/execution/killswitch.py`
 
 Three separable parts, as the sketch insisted: a **tripwire** (`evaluate_tripwires`, pure,
 returns *every* breach rather than the first), a **state** (on disk, manual reset only), and
@@ -473,7 +473,7 @@ cannot be audited.
   the wrong one: a kill switch whose state cannot be read is one whose state is unknown, and
   the safe reading of unknown is stopped.
 
-### The pre-trade veto — `src/execution/veto.py`
+### The pre-trade veto — `stock_agent/execution/veto.py`
 
 The gap flagged at the top of this file, closed. Same caps, applied to the post-trade book
 computed from live broker positions, plus cash sufficiency, participation and the long-only
@@ -507,7 +507,7 @@ Details worth keeping:
 ### Documentation corrected
 
 - The Phase 4 status in this file and in `README.md`, the 164 → 286 test count, and
-  `src/execution/` missing from the README's layout tree. The status now separates the two
+  `stock_agent/execution/` missing from the README's layout tree. The status now separates the two
   things that were being conflated: "in progress" describes the code, and the **gate is
   untouched at zero of thirty sessions** because nothing has run unattended.
 - `README.md` claimed "nothing here connects to a broker". Narrowed to what is actually
@@ -518,7 +518,7 @@ Details worth keeping:
 
 - **No session runner and no Alpaca adapter.** The pieces compose — `test_execution_chain.py`
   threads `recover → reconcile → tripwire → veto → submit` by hand and pins it — but nothing
-  in `src/` walks the sequence. That is the next deliberate piece, and it is what steps 3
+  in `stock_agent/` walks the sequence. That is the next deliberate piece, and it is what steps 3
   and 12 of the session flow are measured by.
 - **The cash check assumes same-session settlement of sale proceeds.** True of the margin
   account Alpaca opens, not of a cash account. Counting only pre-trade buying power would

@@ -7,6 +7,11 @@ name: CI
 # code parses is worse than no check, because it reads like coverage. Lint now covers
 # every authored file, not just `src`, and the suite runs on a clean checkout with no
 # bar cache: the tests that need real market data skip themselves.
+#
+# Every step below takes no path arguments. Lint, types and tests each read their scope
+# from `pyproject.toml` or `ruff.toml`, so a bare `ruff check` / `mypy` / `pytest` run
+# locally is the same check that runs here. Passing paths on the command line is how CI
+# and a developer's shell quietly come to check different things.
 on:
   pull_request:
     branches: [main]
@@ -23,22 +28,26 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: stock-agent/requirements.txt
+          cache-dependency-path: pyproject.toml
 
-      - name: Install dependencies
+      # Editable, so the package is importable without any `sys.path` manipulation and the
+      # tests import `stock_agent` the same way anything else would.
+      - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r stock-agent/requirements.txt
-          pip install ruff
+          pip install -e ".[dev]"
 
       # Rules are pinned in ruff.toml rather than left to ruff's defaults, which grow
       # between releases and would otherwise turn a green branch red on their own.
       - name: Lint
-        run: ruff check stock-agent/src stock-agent/tests stock-agent/config.py stock-agent/pipeline.py
+        run: ruff check .
+
+      # Scoped to the execution path; `pyproject.toml` records why.
+      - name: Types
+        run: mypy
 
       - name: Byte-compile
-        run: python -m compileall -q stock-agent/src stock-agent/tests stock-agent/config.py stock-agent/pipeline.py
+        run: python -m compileall -q stock_agent tests
 
       - name: Tests
-        working-directory: stock-agent
-        run: python -m pytest tests -q
+        run: pytest

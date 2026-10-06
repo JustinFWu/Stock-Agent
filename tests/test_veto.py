@@ -3,6 +3,8 @@
 # the target by design, through scaled buys, deferred names and a month between rebalances.
 
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -195,3 +197,72 @@ def test_the_description_names_what_was_rejected_and_why():
     result = check([intent("AAA", 150.0)], max_weight=0.10)
     assert "per_name_cap" in result.describe()
     assert "AAA" in result.describe()
+
+
+# --- the cap boundary, and the share grid underneath it -------------------------------
+#
+# Found by running the session runner against the real bar cache: two names of ten came
+# back at 0.10000000182 and 0.10000000027 against a 0.10 cap and were rejected. Nothing
+# had breached anything. `target_weights` clips a name to exactly MAX_WEIGHT, and the
+# share count that realises 10.000000% of NAV then rounds to the nearest 10^-6 of a
+# share, which lands a few parts per billion either side. A bare `>` caught the ones that
+# landed above.
+#
+# That is the failure mode this layer was specifically designed to avoid: the veto is an
+# assertion that should never fire, so one that fires on ordinary sessions stops being
+# read. The comparison now carries the resolution of the arithmetic it is checking.
+
+def test_a_name_a_share_grid_above_the_cap_is_not_a_breach():
+    # The exact shape of the real case: the smallest quantised share count that reaches
+    # the cap. Whether rounding to the grid lands above or below the cap depends on the
+    # price, so this takes the ceiling to pin the above case deterministically rather
+    # than relying on one price happening to round up.
+    price = 856.96
+    marks = pd.Series({"AAA": price}, dtype=float)
+    at_cap = 0.10 * EQUITY / price
+    qty = math.ceil(at_cap * 1e6) / 1e6
+
+    weight_after = qty * price / EQUITY
+    assert weight_after > 0.10                  # genuinely above the cap
+    assert weight_after - 0.10 < 1e-8           # by an amount nobody chose
+
+    result = check([intent("AAA", qty)], marks=marks)
+    assert result.is_clean, result.describe()
+
+
+def test_the_slack_is_the_share_grid_and_not_a_tolerance_on_the_limit():
+    # One share through the cap is a breach and still rejects. The slack is eight orders
+    # of magnitude smaller than this, so widening it into a real allowance would take a
+    # deliberate change rather than a rounding accident.
+    price = 856.96
+    marks = pd.Series({"AAA": price}, dtype=float)
+    qty = round(0.10 * EQUITY / price, 6) + 1.0
+
+    result = check([intent("AAA", qty)], marks=marks)
+
+    assert not result.is_clean
+    assert result.rejected[0].reason is Rejection.PER_NAME_CAP
+
+
+def test_a_gross_book_a_share_grid_over_the_ceiling_is_not_a_breach():
+    # The same arithmetic accumulated across names: a fully invested book is the sum of
+    # several quantised positions, so the grid error adds up rather than cancelling.
+    marks = pd.Series({"AAA": 856.96, "BBB": 1191.94, "CCC": 128.37}, dtype=float)
+    intents = [intent(t, round((1 / 3) * EQUITY / marks[t], 6)) for t in ("AAA", "BBB", "CCC")]
+
+    gross = sum(i.qty * marks[i.ticker] for i in intents) / EQUITY
+    assert gross == pytest.approx(1.0, abs=1e-7)
+
+    result = check(intents, marks=marks)
+    assert Rejection.GROSS_CAP not in {r.reason for r in result.rejected}, result.describe()
+
+
+def test_a_gross_book_meaningfully_over_the_ceiling_still_rejects():
+    # The per-name and sector caps are lifted so the gross one is what binds, the same
+    # way `test_the_gross_cap_binds_on_the_whole_book` does it. 1,100 shares at 100
+    # against 100,000 of equity is 110% gross, which is a breach and not a grid artefact.
+    marks = pd.Series({"AAA": 100.0, "BBB": 100.0}, dtype=float)
+    result = check([intent("AAA", 600.0), intent("BBB", 500.0)], marks=marks,
+                   max_weight=1.0, max_sector_weight=1.0, max_gross=1.0)
+
+    assert Rejection.GROSS_CAP in {r.reason for r in result.rejected}

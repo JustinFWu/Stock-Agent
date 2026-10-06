@@ -1,9 +1,10 @@
 # recover -> reconcile -> tripwire -> veto -> submit, threaded end to end.
 #
-# There is no session runner yet, so nothing in `src/` performs this sequence. That is
-# exactly why it is pinned here: the four pieces were built separately and the claim that
-# they compose — in this order, with the broker as the source of truth throughout — is the
-# claim worth a test rather than a comment.
+# This predates the session runner, which is now `stock_agent/execution/session.py` and is
+# covered by `test_session_runner.py`. Both are kept. This file pins the claim that the
+# pieces compose in this order with the broker as the source of truth throughout, written
+# in terms of the pieces themselves; the runner's tests pin what the runner does with them.
+# If the runner is ever rewritten, this is the file that says what it has to keep doing.
 
 
 import pandas as pd

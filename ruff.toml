@@ -33,3 +33,5 @@ select = [
 # module now imports normally, because the package is installed rather than bootstrapped
 # onto `sys.path` at import time.
 "stock_agent/pipeline.py" = ["E402"]
+# Same constraint, same reason: the session CLI loads a .env before `config` reads it.
+"stock_agent/execution/cli.py" = ["E402"]

@@ -7,6 +7,7 @@ from stock_agent.backtest.costs import ALPACA_COSTS, MAX_CREDIBLE_PARTICIPATION,
 from stock_agent.backtest.metrics import format_summary, summarize
 from stock_agent.backtest.portfolio import Portfolio, execute, plan_trades
 from stock_agent.config import (
+    ADV_WINDOW,
     MAX_GROSS,
     MAX_SECTOR_WEIGHT,
     MAX_WEIGHT,
@@ -35,7 +36,7 @@ from stock_agent.strategy.weights import Strategy, target_weights
 
 # Windows for the liquidity and risk inputs the cost model needs. Both are lagged
 # by a day before use so an execution is never priced with its own day's data.
-ADV_WINDOW = 21
+# `ADV_WINDOW` lives in config because the live veto sizes against the same number.
 VOL_WINDOW = 21
 
 # Maps the schedule the caller asks for to a pandas resample rule. Spelled out

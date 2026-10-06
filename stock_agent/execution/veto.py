@@ -7,7 +7,29 @@ import pandas as pd
 from stock_agent.backtest.costs import MAX_CREDIBLE_PARTICIPATION
 from stock_agent.config import MAX_GROSS, MAX_SECTOR_WEIGHT, MAX_WEIGHT
 from stock_agent.data.universe import UniverseSpec
-from stock_agent.execution.broker import Account, OrderIntent
+from stock_agent.execution.broker import QTY_PRECISION, Account, OrderIntent
+
+# A share count is quantised to `QTY_PRECISION`, so the smallest position change this
+# system can express is 10^-6 of a share. Converted to a weight that is `grid * price / nav`,
+# and a "breach" smaller than that is the grid rather than a decision anyone made.
+#
+# This matters because the caps are applied twice: `target_weights` clips a name to exactly
+# MAX_WEIGHT, and then the share count that realises 10.000000% of NAV rounds to the nearest
+# 10^-6 of a share — which lands a few parts per billion either side. Measured on the real
+# cache, two names of ten came back at 0.10000000182 and 0.10000000027 against a 0.10 cap.
+# A bare `>` rejects both, and a veto that fires on ordinary sessions is one nobody reads —
+# which is the specific failure this layer was designed to avoid.
+#
+# This is not a tolerance on the risk limit. It is the resolution of the arithmetic the
+# limit is being checked with, derived from QTY_PRECISION rather than tuned. A real breach
+# is six or more orders of magnitude larger. The alternative was to floor the quantity in
+# the reconciler so a buy can never round up through a cap; that fixes a buy from flat and
+# does nothing for the same boundary reached by drift, so the check is the place to fix.
+SHARE_GRID = 10.0 ** -QTY_PRECISION
+
+
+def _grid_slack(price: float, nav: float) -> float:
+    return SHARE_GRID * abs(price) / nav
 
 # The hard, auditable, non-negotiable layer the roadmap's architecture describes, and the
 # thing the repo did not have. Every risk limit before this one was enforced at weight
@@ -160,7 +182,7 @@ def _individual_fault(intent: OrderIntent, held: dict[str, float], marks: pd.Ser
 
     weight_after = abs(after) * price / nav
     weight_before = abs(before) * price / nav
-    if weight_after > max_weight and weight_after > weight_before:
+    if weight_after > max_weight + _grid_slack(price, nav) and weight_after > weight_before:
         return Rejected(intent, Rejection.PER_NAME_CAP,
                         f"{intent.ticker} would reach {weight_after:.2%} of equity "
                         f"(cap {max_weight:.0%}, currently {weight_before:.2%})")
@@ -216,9 +238,22 @@ def _value(book: dict[str, float], marks: pd.Series) -> dict[str, float]:
     return values
 
 
+def _group_slack(tickers, marks: pd.Series, nav: float) -> float:
+    # The same share-grid reasoning as `_grid_slack`, accumulated: a total over N names
+    # carries up to N names' worth of quantisation, so the slack is the sum rather than
+    # the maximum. Still eight orders of magnitude below any breach worth rejecting.
+    total = 0.0
+    for ticker in tickers:
+        price = float(marks.get(ticker, np.nan))
+        if np.isfinite(price):
+            total += abs(price)
+    return SHARE_GRID * total / nav
+
+
 def _gross_breach(intents, held, marks, nav, account, universe, max_gross, max_sector_weight):
-    gross = sum(_value(_post_trade(intents, held), marks).values()) / nav
-    if gross <= max_gross:
+    book = _post_trade(intents, held)
+    gross = sum(_value(book, marks).values()) / nav
+    if gross <= max_gross + _group_slack(book, marks, nav):
         return None
     culprits = [i for i in intents if _increases_exposure(i, held)]
     if not culprits:
@@ -233,7 +268,7 @@ def _sector_breach(intents, held, marks, nav, account, universe, max_gross, max_
     values = _value(book, marks)
     for group, members in universe.sector_groups(sorted(values)).items():
         exposure = sum(values[t] for t in members) / nav
-        if exposure <= max_sector_weight:
+        if exposure <= max_sector_weight + _group_slack(members, marks, nav):
             continue
         culprits = [i for i in intents
                     if i.ticker in set(members) and _increases_exposure(i, held)]

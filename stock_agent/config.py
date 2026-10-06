@@ -20,6 +20,12 @@ STATE_DIR = DATA_DIR / "state"
 ORDER_LOG_PATH = STATE_DIR / "orders.jsonl"
 KILL_SWITCH_PATH = STATE_DIR / "kill_switch.json"
 
+# One line per session, appended. This is the operating record Phase 4's gate is counted
+# from — thirty clean unattended sessions is a claim about what happened, so it has to be
+# written down as it happens rather than reconstructed afterwards from the order log, which
+# only knows about sessions that placed orders.
+SESSION_LOG_PATH = STATE_DIR / "sessions.jsonl"
+
 # A fixed date rather than a yfinance `period`: 12-2 momentum burns twelve months on
 # formation, yfinance has no "20y" period string, and a fixed date keeps rebuilds
 # reproducible instead of sliding with today.
@@ -88,6 +94,12 @@ MAX_DRAWDOWN = 0.20
 # two are treated as describing different portfolios. Wide enough to absorb a stale close
 # against a live mark, narrow enough that a missing or unknown position shows up.
 NAV_RECONCILIATION_TOLERANCE = 0.005
+
+# Lookback for the average-daily-notional estimate the cost model and the pre-trade veto
+# both size orders against. Here rather than in `engine.py` because the live execution path
+# needs the same number, and the live path importing the backtester to get at a constant is
+# a dependency pointing the wrong way.
+ADV_WINDOW = 21
 
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")

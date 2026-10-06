@@ -97,7 +97,7 @@ def _proposal_scale(strategy: Strategy) -> str:
     # Raising rather than defaulting is the point: a default is silently wrong for half of
     # all strategies, and wrong in a way that produces a plausible portfolio rather than an
     # error — which is how the mistake survives review.
-    scale = getattr(strategy, "proposal_scale", None)
+    scale: object = getattr(strategy, "proposal_scale", None)
     if scale not in PROPOSAL_SCALES:
         raise ValueError(
             f"{getattr(strategy, 'name', type(strategy).__name__)!r} must declare "
@@ -106,7 +106,9 @@ def _proposal_scale(strategy: Strategy) -> str:
             "below 1 is a deliberate cash position; 'relative' means only the "
             "ratios matter and the shape gets normalised to the gross ceiling."
         )
-    return scale
+    # Narrowed by the membership test above: PROPOSAL_SCALES holds strings, so anything
+    # that got past the guard is one of them.
+    return str(scale)
 
 
 def _apply_constraints(proposed: pd.Series, candidates: list[str], scale: str,

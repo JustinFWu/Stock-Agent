@@ -41,6 +41,9 @@ dev = [
 
 [project.scripts]
 stock-agent = "stock_agent.pipeline:main"
+# A separate entry point on purpose: the research CLI reads the cache and prints numbers,
+# this one can place orders. One mistyped flag should not be the difference.
+stock-agent-session = "stock_agent.execution.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["stock_agent*"]
@@ -65,10 +68,28 @@ python_version = "3.12"
 # plain dataclasses, a Protocol and two state machines, types carry the weight there, and a
 # mistake costs money rather than a backtest number. It is clean and it stays clean.
 #
-# Following imports means this already typechecks `portfolio.py`, `weights.py` and `panel.py`
-# to the extent the execution path touches them. Widening to the rest of `stock_agent` and
-# then `tests` is worth doing per-module, not in one sweep.
-files = ["stock_agent/execution"]
+# The gate is an allowlist of modules that have been driven to zero, and it grows by
+# adding a line here once a module is clean. `follow_imports = "silent"` is what makes that
+# possible: imported modules are still read for their real types, so the listed files are
+# checked against the truth rather than against Any, but errors inside an unlisted module
+# are not reported. Without it, adding one import to the execution path would drag the
+# whole numeric stack into the gate and the only way to stay green would be to stop
+# checking anything.
+follow_imports = "silent"
+files = [
+    "stock_agent/execution",          # the money path: dataclasses, a Protocol, two state machines
+    "stock_agent/backtest/portfolio.py",
+    "stock_agent/data/fetcher.py",
+    "stock_agent/data/panel.py",
+    "stock_agent/strategy/factory.py",
+    "stock_agent/strategy/live.py",
+    "stock_agent/strategy/weights.py",
+]
+
+# Not yet in the gate, and each for the same reason: `momentum.py`, `vol_forecast.py`,
+# `engine.py`, `metrics.py`, `labels/target.py`, `features/`, `dataset.py`, `pipeline.py`
+# and `tests/`. Between them they account for the errors described above, which are
+# dominated by stub imprecision. They are worth taking one module at a time.
 
 # Not `strict`. Strict mode's `disallow_untyped_defs` would demand annotations on every
 # test body, which says nothing about correctness, and `disallow_any_expr` is unusable

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import pandas as pd
 
@@ -27,7 +28,10 @@ class PricePanel:
 
     @property
     def dates(self) -> pd.DatetimeIndex:
-        return self.closes.index
+        # `cast` rather than a constructor: the index is built as a DatetimeIndex in
+        # `load_price_panel` and this property is read inside the backtest's daily loop,
+        # so rebuilding it on every access would be paying for what the stubs cannot see.
+        return cast(pd.DatetimeIndex, self.closes.index)
 
     @property
     def tickers(self) -> list[str]:
@@ -73,8 +77,8 @@ def load_price_panel(tickers: list[str]) -> PricePanel:
     # Deliberately does not download: a backtest must not be able to change its own input
     # data mid-run. Missing tickers are skipped rather than raised, so a twenty-minute
     # backtest does not die on its last ticker.
-    columns = {field: {} for field in FIELDS}
-    missing = []
+    columns: dict[str, dict[str, pd.Series]] = {field: {} for field in FIELDS}
+    missing: list[str] = []
 
     for ticker in sorted({t.upper() for t in tickers}):
         try:

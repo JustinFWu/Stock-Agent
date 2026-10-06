@@ -18,15 +18,17 @@ no code exists for it.
 | 1 | Volatility forecast vs EWMA / HAR-RV | cleared |
 | 2 | Cost-aware event-driven backtester | cleared |
 | 3 | 12-2 momentum + vol-targeted sizing | **gate failed** |
-| 4 | Broker interface, reconciliation, monitoring | in progress — gate untouched |
+| 4 | Broker interface, reconciliation, the live session path | code in progress — gate 0 / 30 |
 
-286 tests pass, `ruff` clean.
+346 tests pass, `ruff` clean, `mypy` clean over the gated scope.
 
 Phase 4 delivered so far: the broker vocabulary and Protocol, a crash-capable fake, the
-write-ahead order log and recovery, the reconciler, the drawdown kill switch and the
-pre-trade veto. Not built: the Alpaca adapter, the session runner, monitoring and alerting.
-The **gate is untouched at zero of thirty sessions**, because nothing has run unattended —
-"in progress" describes the code, and the gate describes the operating record.
+write-ahead order log and recovery, the reconciler, the drawdown kill switch, the pre-trade
+veto, the Alpaca adapter and the session runner. Not built: alerting that reaches a human
+who is not reading a terminal. The **gate is untouched at zero of thirty sessions**,
+because nothing has run against a funded account — "in progress" describes the code, and
+the gate describes the operating record. Those are different claims and the table keeps
+them apart on purpose.
 
 ### The governing decision (2026-09-13)
 
@@ -140,9 +142,13 @@ that it was written first.
   Order store                    EXISTS - store.py, recovery.py
           |                      write-ahead; deterministic client_order_id
           v
-  Broker (Protocol)  ->  AlpacaBroker (NOT BUILT)    IBKRBroker (later)
-                         FakeBroker EXISTS - fake.py
+  Broker (Protocol)  ->  AlpacaBroker EXISTS - alpaca.py   IBKRBroker (later)
+                         FakeBroker   EXISTS - fake.py
 ```
+
+*Built 2026-10-06: `session.py` now walks the sequence and `alpaca.py` is the venue
+adapter. The paragraph below is left as it was written, because what was missing and why
+is the part that is not recoverable from the diff.*
 
 No session runner yet, so nothing in `stock_agent/` performs the sequence end to end.
 `tests/test_execution_chain.py` threads it by hand and is where the claim that the pieces
@@ -526,3 +532,210 @@ Details worth keeping:
 - **Phase 3 stands as measured.** Nothing here re-runs it, and the demonstrated hole in its
   gate is still recorded rather than patched. A future re-run needs a beta control beside
   the IR *and* point-in-time data; neither is a Phase 4 concern.
+
+---
+
+## Session record — 2026-10-06
+
+Acted on an external code review. Two pieces: the packaging the repo never had, and the
+session runner plus venue adapter that the Phase 4 gate was waiting on. 286 tests → 346,
+`ruff` clean, `mypy` clean, `--backtest` reproduces its previous numbers exactly.
+
+### What the review got right, and the one thing it understated
+
+The review's ranking was correct and is worth recording because it was external: the
+packaging was the only thing in the repo that "looks student-grade", and the gap that
+mattered most was that **none of this had ever run**. Both are now addressed.
+
+It understated one item. "Adding mypy or pyright is nearly free given how the code is
+written" is true of the execution path and not true of the numeric stack: a full-tree run
+reports 93 errors, of which the large majority are `pandas-stubs` imprecision —
+`.loc[date]` typed `Series | DataFrame` when the caller knows which, `rolling`/`ewm`
+results typed `ndarray` when they are Series. Clearing those means roughly fifty casts
+threaded through code that is correct and covered, which trades real risk for a green
+check. So the gate is an allowlist, not the whole tree. See below.
+
+### The packaging — `pyproject.toml`, and the flatten
+
+The repo was importable by accident. Forty-two modules and tests each began with
+`sys.path.append(Path(__file__).parent...)`, so imports depended on the working directory,
+and `ruff.toml` carried a comment explaining that the import-sorting rule was
+*unselectable* because no ordering can satisfy a local import that follows a path
+mutation. The lint config was apologising for the packaging.
+
+- `stock-agent/` flattened into the repository root; `src/` became `stock_agent/`, a real
+  package, with `config.py` and `pipeline.py` inside it. `config.ROOT` moved up one level
+  so the bar cache, the saved model and `data/state/` still resolve beside the source tree
+  rather than inside the installed package.
+- `pip install -e ".[dev]"`. `requirements.txt` is gone and its verified-version record
+  lives as a comment in `pyproject.toml`. Two console scripts, which is the next entry.
+- All forty-two bootstraps deleted and ruff's `I` rule enabled — the thing the config said
+  it wanted and could not have. The only surviving `E402` exemptions are `pipeline.py` and
+  the session CLI, where `load_dotenv()` genuinely has to run before `config` reads the
+  environment.
+
+Git recorded the moves as renames, so history follows the files.
+
+### The type gate is an allowlist, and it was checked for bite
+
+`files` in `pyproject.toml` names the modules that have been driven to zero, and
+`follow_imports = "silent"` is what makes that workable: imported modules are still read
+for their real types, so the listed files are checked against the truth rather than
+against `Any`, but errors inside an unlisted module are not reported. Without it, adding
+one import to the execution path drags the whole numeric stack into the gate, and the only
+way to stay green would be to stop checking anything.
+
+Seventeen files are gated and clean. What mypy actually found and fixed, all of it real:
+unannotated accumulators in `recover`, a pandas `.items()` key typed `Hashable` handed to
+helpers declaring `str` in `reconcile._sized` and three `portfolio` call sites, a manifest
+that parsed but need not be an object, a `last_error` narrowed to `ValueError` by its
+first assignment, and a `bool(entry) and entry.get(...)` that mypy could not narrow and a
+reader could not either.
+
+A green check that cannot fail is worse than no check, so the gate was verified by
+breaking it on purpose — a `-> float` returning a string, caught, reverted.
+
+**`ADV_WINDOW` moved from `engine.py` to `config.py`.** The live veto sizes orders against
+the same number, and the live execution path importing the backtester to get at a constant
+is a dependency pointing the wrong way. `build_strategy` moved out of `pipeline.py` into
+`stock_agent/strategy/factory.py` for the same reason: the session CLI needs it, and the
+trading entry point depending on the research entry point is backwards.
+
+### `alpaca.py` — the venue adapter
+
+Six methods, each one request, plus the mapping from the venue's words to ours. No SDK:
+the Protocol is six calls and the part that has to be right is not the HTTP but the
+mapping, which an SDK would hide rather than remove.
+
+- **Paper by default, and the live endpoint needs more than flipping the flag.**
+  `AlpacaBroker(paper=False)` raises unless also given
+  `i_understand_this_is_real_money=True`. Phase 4's own card says passing its gate is a
+  plumbing result and not permission for capital, so the default has to be the one that
+  cannot lose money even if every other guard in the repo is wrong.
+- **The four sides collapse to two here and nowhere else.** Alpaca takes `buy`/`sell` and
+  infers shorting and covering from the position. This is exactly the branch the sketch
+  predicted when it argued for keeping `Side` wide: widening the enum stayed cheap because
+  the venue mapping is one function rather than a signature everything upstream depends on.
+- **Silence is an unknown outcome, not a rejection.** A timeout, a dropped connection or
+  unparseable JSON raises `BrokerError` saying so in those words, which is what makes
+  `submit_intent` record nothing and re-raise. Writing "failed" is how a filled order
+  becomes invisible.
+- **A duplicate `client_order_id` is its own error**, matched on the message as well as
+  the code, because the numeric code has moved between API revisions and a duplicate
+  misread as a generic failure is the one error that would make a recovered session submit
+  twice.
+- **An unrecognised order status maps to `PENDING` and raises an alert.** Not terminal, so
+  recovery keeps asking and the reconciler keeps the name deferred. Mapping an unknown word
+  to `FILLED` would have a session size against a position that may not exist; raising
+  would halt trading because a venue added a vocabulary word.
+- Keys are read from the environment when the adapter is *constructed*, not at import.
+  Defaulting them from `config` at import time makes the keys depend on whether
+  `load_dotenv()` ran before this module was first imported, which is an import-order bug
+  waiting for the one session that imports things in a new order.
+
+The tests stub the transport rather than the network and assert on the mapping, because
+that is where a thin adapter can be wrong. The three error-translation cases stub `urlopen`
+instead, a level lower, since stubbing `_request` would replace the code under test.
+
+### `session.py` — the runner
+
+The twelve steps as a program. Everything it calls already existed, and
+`test_execution_chain.py` already threaded them by hand — which was the honest state of
+it, and also the reason the gate stood at zero.
+
+- **`submit=False` is the default and it is not a simulation.** It reads the broker's real
+  positions and equity, runs recovery, reconciliation, the tripwires and the veto, and
+  stops before `submit()`. Everything that can be wrong about a session is wrong before the
+  order goes out.
+- **A separate console script**, `stock-agent-session`, not a flag on `stock-agent`. One
+  mistyped argument should not separate "re-run the backtest" from "trade the account".
+- **One line per session in `data/state/sessions.jsonl`, fsynced.** The gate is thirty
+  clean unattended sessions, so the count has to come from a record written as each one
+  happens rather than reconstructed from the order log — which only knows about sessions
+  that placed an order. A halted or failed session is recorded too; a failure that left no
+  trace would be counted as a quiet day.
+- **`is_clean` is stricter than "completed".** An alert is by definition the thing that
+  needed a human, and unattended is the claim being made. The CLI exits non-zero on
+  anything else, which is what a cron line notices.
+- **A failed send stops the rest of the queue.** The outcome of that one is unknown, so the
+  book is no longer a number this session can size against; carrying on down the list
+  would size against it anyway.
+- **Deliberate deviation from the sketch.** The sketch puts the staleness and coverage
+  guards at step 2, before recovery at step 3. Those guards raise, so a stale cache would
+  exit before recovery had settled the previous session's orders. They are now *measured*
+  at step 2 and fed to the tripwire, recovery runs next, and the hard refusal stays where
+  it already lived, inside `live_target_weights`, which is reached after. Nothing can trade
+  on stale data either way; the difference is whether the log gets settled first.
+- **Step 12 needed two checks, not one.** The first version compared the broker's closing
+  book against the book the session started from plus its own fills. That catches a fill we
+  recorded that the venue did not make — and provably cannot catch a position that appeared
+  *before* the session started, because the baseline already contains it. Which is the main
+  thing step 12 is for. There are now two: an **opening** check against the previous
+  session's recorded closing book, plus the orders recovery settled overnight, and the
+  **closing** check as before. Each session records its closing book so the next one has a
+  baseline; a fresh log has none, so the first session establishes one rather than reporting
+  the whole account as drift.
+
+### A real defect the runner found on its first real run
+
+Running a dry session against the actual bar cache, the veto rejected two names of ten on
+the per-name cap, both reported as "would reach 10.00% of equity (cap 10%)". Nothing had
+breached anything. `target_weights` clips a name to exactly `MAX_WEIGHT`, and the share
+count realising 10.000000% of NAV then rounds to the nearest 10⁻⁶ of a share, landing a
+few parts per billion either side — CAT at 0.10000000182, MRK at 0.10000000027. A bare `>`
+caught the ones that landed above.
+
+That is precisely the failure this layer was designed to avoid. The veto is an assertion
+that should never fire, so one that fires on ordinary sessions stops being read, and the
+rejections were raised at CRITICAL.
+
+The comparison now carries the resolution of the arithmetic it is checking:
+`SHARE_GRID = 10**-QTY_PRECISION`, so the slack on a per-name cap is one share-grid step
+valued at the current price over NAV, and on gross and sector caps it is that summed over
+the names in the group, because a total over N names carries N names' worth of
+quantisation. **This is not a tolerance on the risk limit** — it is derived from
+`QTY_PRECISION` rather than tuned, and a real breach is six or more orders of magnitude
+larger. Pinned both ways: a position one grid step above the cap passes, and a position one
+*share* above it still rejects.
+
+The alternative was flooring the quantity in the reconciler so a buy can never round up
+through a cap. That fixes a buy from flat and does nothing about the same boundary reached
+by drift, so the check is the right place.
+
+After the fix the same session reports `clean: True` with all ten intents allowed.
+
+### Verification
+
+- 346 tests, no skips, so the real-bar parity tests did run. 56 new: 21 on the runner,
+  35 on the adapter, 4 on the cap boundary.
+- `ruff check .`, `mypy` and `compileall` clean, each taking its scope from configuration
+  so a bare invocation locally is the check CI runs.
+- `--backtest --strategy momentum --baseline equal` reproduces 2575.6% total return, CAGR
+  16.48%, vol 21.35%, Sharpe 0.73 — identical before and after the refactor, which is what
+  makes the `ADV_WINDOW` move and the `portfolio.py` narrowing safe to believe.
+- The runner was walked end to end against the real 82-name cache three times in sequence
+  — dry run, armed, then a third session on an unchanged book — including the no-op case
+  that most of thirty sessions will be.
+
+### Left open, deliberately
+
+- **The gate is still 0 of 30, and that is now the only thing between here and Phase 4.**
+  What remains is operational, not code: Alpaca paper keys, a schedule, and thirty
+  sessions. Nothing in this session ran against a funded account, paper or live.
+- **No alerting that reaches a human who is not at a terminal.** The runner collects
+  alerts, records them, and exits non-zero; what it does not do is send anything. That is
+  the honest remaining piece of "monitoring and alerting", and it is deliberately last,
+  because a notifier built before there is an operating record has nothing to notify about.
+- **The cash check still assumes same-session settlement of sale proceeds.** True of the
+  margin account Alpaca opens, not of a cash account. Unchanged from 2026-09-18 and the
+  reasoning is unchanged.
+- **Market orders, `time_in_force=day`.** A session running after the close queues orders
+  that fill at the next open, which is why `prices` and `marks` are both that session's
+  close and are an estimate for sizing rather than a fill price. Limit orders are a venue
+  decision that has not been made and should not be made before thirty sessions say what
+  the fills actually look like.
+- **`tests/` and the numeric modules are outside the type gate.** Listed in
+  `pyproject.toml` with the reason. Worth taking one module at a time, not in one sweep.
+- **Phase 3 stands as measured.** Nothing here re-runs it. The demonstrated hole in its
+  gate is still recorded rather than patched, and a future re-run needs a beta control
+  beside the IR *and* point-in-time data.

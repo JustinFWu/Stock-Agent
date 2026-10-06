@@ -34,17 +34,10 @@ from stock_agent.data.panel import load_price_panel
 from stock_agent.data.universe import BENCHMARK, UNIVERSE
 from stock_agent.models.vol_forecast import (
     build_oos_vol_panel,
-    load_oos_vol_panel,
     train_vol_model,
     validate_vol_forecast,
 )
-from stock_agent.strategy.momentum import (
-    MomentumStrategy,
-    PanelVolForecast,
-    RealizedVolForecast,
-    VolTargetedMomentum,
-)
-from stock_agent.strategy.weights import EqualWeightStrategy
+from stock_agent.strategy.factory import STRATEGIES, VOL_SOURCES, build_strategy
 
 
 def do_fetch(refetch: bool) -> list[str]:
@@ -100,18 +93,6 @@ def do_build_vol_panel(n_splits: int, kind: str, force_rebuild: bool, refetch: b
     build_oos_vol_panel(df, n_splits=n_splits, kind=kind)
 
 
-STRATEGIES = ("equal", "momentum", "vol-momentum")
-VOL_SOURCES = ("panel", "ewma")
-
-
-def build_strategy(name: str, vol_source: str, vol_target: float):
-    if name == "equal":
-        return EqualWeightStrategy()
-    if name == "momentum":
-        return MomentumStrategy()
-    forecast = (RealizedVolForecast() if vol_source == "ewma"
-                else PanelVolForecast(load_oos_vol_panel()))
-    return VolTargetedMomentum(forecast, vol_target=vol_target)
 
 
 def do_backtest(strategy_name: str, baseline_name: str, vol_source: str, vol_target: float,

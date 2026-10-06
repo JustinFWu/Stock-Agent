@@ -20,13 +20,16 @@ class FetchError(RuntimeError):
     pass
 
 
-def _load_manifest() -> dict:
+def _load_manifest() -> dict[str, dict]:
     if not MANIFEST_PATH.exists():
         return {}
     try:
-        return json.loads(MANIFEST_PATH.read_text())
+        loaded = json.loads(MANIFEST_PATH.read_text())
     except (json.JSONDecodeError, OSError):
         return {}  # unreadable manifest just means everything looks stale
+    # A manifest that parsed but is not an object is as useless as one that did not, and
+    # saying so here beats an AttributeError at the first `.get` three frames away.
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _save_manifest(manifest: dict) -> None:
@@ -43,13 +46,13 @@ def manifest_entry(ticker: str) -> dict:
 
 def _download(ticker: str, start: str, interval: str) -> pd.DataFrame:
     # Retries because yfinance fails transiently often enough over ~90 tickers.
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         try:
             # auto_adjust: unadjusted closes would put a fake -50% return on every split
             # date, wrecking both the momentum formation return and the vol estimate.
-            df = yf.download(ticker, start=start, interval=interval,
-                             auto_adjust=True, progress=False, threads=False)
+            df: pd.DataFrame = yf.download(ticker, start=start, interval=interval,
+                                           auto_adjust=True, progress=False, threads=False)
             if not df.empty:
                 return df
             last_error = ValueError("empty frame returned")
@@ -100,7 +103,9 @@ def is_current(ticker: str, start: str = HISTORY_START,
     if not (RAW_DIR / f"{ticker}.parquet").exists():
         return False
     entry = _load_manifest().get(ticker)
-    return bool(entry) and entry.get("start") == start and entry.get("interval") == interval
+    if entry is None:
+        return False
+    return entry.get("start") == start and entry.get("interval") == interval
 
 
 def load_bars(ticker: str) -> pd.DataFrame:

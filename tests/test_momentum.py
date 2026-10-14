@@ -223,6 +223,36 @@ def test_panel_forecast_never_reads_past_as_of(drifting_panel):
     assert forecast.vols(dates[300], ["AAA"], drifting_panel)["AAA"] == pytest.approx(0.2)
 
 
+def test_a_panel_that_stops_before_the_bars_is_refused(drifting_panel):
+    dates = drifting_panel.dates
+    panel = pd.DataFrame(0.2, index=dates[:300], columns=["AAA", "BBB", "CCC"])
+
+    forecast = PanelVolForecast(panel)
+    assert forecast.vols(dates[299], ["AAA"], drifting_panel)["AAA"] == pytest.approx(0.2)
+    with pytest.raises(ValueError, match="stale forecast"):
+        forecast.vols(dates[300], ["AAA"], drifting_panel)
+
+
+def test_a_market_closure_is_not_a_stale_panel(drifting_panel):
+    dates = drifting_panel.dates
+    bars = make_panel(drifting_panel.closes.drop(dates[[298, 299]]))
+    panel = pd.DataFrame(0.2, index=bars.dates[bars.dates <= dates[300]],
+                         columns=["AAA", "BBB", "CCC"])
+
+    forecast = PanelVolForecast(panel)
+    assert forecast.vols(dates[300], ["AAA"], bars)["AAA"] == pytest.approx(0.2)
+
+
+def test_the_strategy_refuses_rather_than_dropping_names_on_a_stale_panel(drifting_panel):
+    dates = drifting_panel.dates
+    panel = pd.DataFrame(0.2, index=dates[:-10], columns=["AAA", "BBB", "CCC"])
+    strategy = VolTargetedMomentum(PanelVolForecast(panel), vol_target=0.10, cov_lookback=5,
+                                   lookback=100, skip=5, top_fraction=1.0)
+
+    with pytest.raises(ValueError, match="stale forecast"):
+        strategy.propose(dates[-1], drifting_panel, ["AAA", "BBB", "CCC"])
+
+
 def test_realized_forecast_returns_annualised_vol(drifting_panel):
     forecast = RealizedVolForecast()
     vols = forecast.vols(drifting_panel.dates[-1], ["AAA", "BBB", "CCC"], drifting_panel)

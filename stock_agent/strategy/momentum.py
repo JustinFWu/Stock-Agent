@@ -50,7 +50,19 @@ class PanelVolForecast:
         available = self.panel.loc[:as_of]
         if available.empty:
             return pd.Series(np.nan, index=tickers, dtype=float)
+        _check_panel_current(available.index[-1], as_of, history)
         return available.iloc[-1].reindex(tickers).astype(float)
+
+
+def _check_panel_current(last_row, as_of, history: PricePanel) -> None:
+    # Counted in bar sessions, not calendar days, so a market closure is not a stale panel.
+    as_of = pd.Timestamp(as_of)
+    missed = history.dates[(history.dates > last_row) & (history.dates <= as_of)]
+    if len(missed):
+        raise ValueError(
+            f"The vol panel ends {pd.Timestamp(last_row).date()}, {len(missed)} trading "
+            f"session(s) before {as_of.date()}. Refusing to size off a stale forecast — "
+            "rebuild it with `stock-agent --build-vol-panel`, or use `--vol-source ewma`.")
 
 
 class RealizedVolForecast:

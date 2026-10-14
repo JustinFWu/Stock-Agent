@@ -11,6 +11,7 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import make_panel
 
 from stock_agent.data.universe import UniverseSpec
 from stock_agent.execution.fake import FailPoint, FakeBroker, Fault
@@ -18,7 +19,6 @@ from stock_agent.execution.killswitch import KillSwitch, TripReason
 from stock_agent.execution.session import SessionOutcome, Severity, run_session
 from stock_agent.execution.store import OrderStore
 from stock_agent.strategy.weights import EqualWeightStrategy
-from tests.conftest import make_panel
 
 SESSION = pd.Timestamp("2026-09-18")
 TODAY = pd.Timestamp("2026-09-19")

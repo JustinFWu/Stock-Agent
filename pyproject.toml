@@ -44,6 +44,7 @@ stock-agent = "stock_agent.pipeline:main"
 # A separate entry point on purpose: the research CLI reads the cache and prints numbers,
 # this one can place orders. One mistyped flag should not be the difference.
 stock-agent-session = "stock_agent.execution.cli:main"
+stock-agent-daily = "stock_agent.execution.daily:main"
 
 [tool.setuptools.packages.find]
 include = ["stock_agent*"]

@@ -26,6 +26,12 @@ KILL_SWITCH_PATH = STATE_DIR / "kill_switch.json"
 # only knows about sessions that placed orders.
 SESSION_LOG_PATH = STATE_DIR / "sessions.jsonl"
 
+# State for `--broker fake` runs, kept apart from the record the gate counts.
+FAKE_STATE_DIR = STATE_DIR / "fake"
+
+# Transcript of each scheduled run (fetch + session output), one file per day.
+DAILY_LOG_DIR = STATE_DIR / "daily"
+
 # A fixed date rather than a yfinance `period`: 12-2 momentum burns twelve months on
 # formation, yfinance has no "20y" period string, and a fixed date keeps rebuilds
 # reproducible instead of sliding with today.

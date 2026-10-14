@@ -19,6 +19,8 @@ goes out.
 
 import argparse
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -27,7 +29,12 @@ from dotenv import load_dotenv
 # convenience rather than the mechanism.
 load_dotenv()
 
-from stock_agent.config import KILL_SWITCH_PATH, ORDER_LOG_PATH, SESSION_LOG_PATH
+from stock_agent.config import (
+    FAKE_STATE_DIR,
+    KILL_SWITCH_PATH,
+    ORDER_LOG_PATH,
+    SESSION_LOG_PATH,
+)
 from stock_agent.data.universe import UNIVERSE
 from stock_agent.execution.fake import FakeBroker
 from stock_agent.execution.killswitch import KillSwitch
@@ -38,10 +45,27 @@ from stock_agent.strategy.factory import STRATEGIES, VOL_SOURCES, build_strategy
 BROKERS = ("alpaca-paper", "alpaca-live", "fake")
 
 
+@dataclass(frozen=True)
+class StatePaths:
+    orders: Path
+    kill_switch: Path
+    sessions: Path
+
+
+def state_paths(broker: str) -> StatePaths:
+    # Fake sessions get their own state so they never count toward, or trip, the real record.
+    if broker == "fake":
+        return StatePaths(FAKE_STATE_DIR / ORDER_LOG_PATH.name,
+                          FAKE_STATE_DIR / KILL_SWITCH_PATH.name,
+                          FAKE_STATE_DIR / SESSION_LOG_PATH.name)
+    return StatePaths(ORDER_LOG_PATH, KILL_SWITCH_PATH, SESSION_LOG_PATH)
+
+
 def main() -> int:
     args = _parse_args()
+    paths = state_paths(args.broker)
 
-    switch = KillSwitch(KILL_SWITCH_PATH)
+    switch = KillSwitch(paths.kill_switch)
 
     if args.reset_kill_switch:
         state = switch.reset(args.reset_kill_switch, note=args.note)
@@ -49,18 +73,18 @@ def main() -> int:
         return 0
 
     if args.status:
-        return _print_status(switch)
+        return _print_status(switch, paths)
 
     broker = _build_broker(args.broker)
     report = run_session(
         broker=broker,
-        store=OrderStore(ORDER_LOG_PATH),
+        store=OrderStore(paths.orders),
         kill_switch=switch,
         strategy=build_strategy(args.strategy, args.vol_source, args.vol_target),
         universe=UNIVERSE,
         as_of=args.as_of,
         submit=args.submit,
-        session_log=SESSION_LOG_PATH,
+        session_log=paths.sessions,
     )
 
     print(report.describe())
@@ -87,18 +111,18 @@ def _build_broker(name: str):
     return AlpacaBroker(paper=True)
 
 
-def _print_status(switch: KillSwitch) -> int:
+def _print_status(switch: KillSwitch, paths: StatePaths) -> int:
     print(f"kill switch: {switch.state.describe()}")
-    print(f"order log:   {ORDER_LOG_PATH}")
+    print(f"order log:   {paths.orders}")
 
-    store = OrderStore(ORDER_LOG_PATH)
+    store = OrderStore(paths.orders)
     open_orders = store.unresolved()
     print(f"open orders: {len(open_orders)}")
     for record in open_orders:
         print(f"  {record.client_order_id}  {record.state.value}")
 
-    sessions = _tail_sessions(5)
-    print(f"sessions:    {len(sessions)} shown from {SESSION_LOG_PATH}")
+    sessions = _tail_sessions(paths.sessions, 5)
+    print(f"sessions:    {len(sessions)} shown from {paths.sessions}")
     for row in sessions:
         flag = "clean" if row.get("clean") else "ATTENTION"
         print(f"  {row.get('session_date')}  {row.get('outcome'):<9} {flag:<9} "
@@ -106,13 +130,13 @@ def _print_status(switch: KillSwitch) -> int:
     return 0 if not switch.is_tripped else 1
 
 
-def _tail_sessions(count: int) -> list[dict]:
+def _tail_sessions(path: Path, count: int) -> list[dict]:
     import json
 
-    if not SESSION_LOG_PATH.exists():
+    if not path.exists():
         return []
     rows = []
-    for line in SESSION_LOG_PATH.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

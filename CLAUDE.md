@@ -20,12 +20,12 @@ no code exists for it.
 | 3 | 12-2 momentum + vol-targeted sizing | **gate failed** |
 | 4 | Broker interface, reconciliation, the live session path | code in progress — gate 0 / 30 |
 
-346 tests pass, `ruff` clean, `mypy` clean over the gated scope.
+365 tests pass, `ruff` clean, `mypy` clean over the gated scope.
 
 Phase 4 delivered so far: the broker vocabulary and Protocol, a crash-capable fake, the
 write-ahead order log and recovery, the reconciler, the drawdown kill switch, the pre-trade
-veto, the Alpaca adapter and the session runner. Not built: alerting that reaches a human
-who is not reading a terminal. The **gate is untouched at zero of thirty sessions**,
+veto, the Alpaca adapter, the session runner, and a scheduled daily run that emails its
+outcome. The **gate is untouched at zero of thirty sessions**,
 because nothing has run against a funded account — "in progress" describes the code, and
 the gate describes the operating record. Those are different claims and the table keeps
 them apart on purpose.
@@ -739,3 +739,46 @@ After the fix the same session reports `clean: True` with all ten intents allowe
 - **Phase 3 stands as measured.** Nothing here re-runs it. The demonstrated hole in its
   gate is still recorded rather than patched, and a future re-run needs a beta control
   beside the IR *and* point-in-time data.
+
+---
+
+## Session record — 2026-10-14
+
+Fixed CI, closed two gaps found while planning the first live sessions, and built the
+scheduled run. 346 tests → 365, `ruff` and `mypy` clean, CI green on `main`.
+
+- **CI was red on `main` since 2026-10-06.** `test_session_runner.py` imported
+  `tests.conftest`, which resolves under `python -m pytest` but not bare `pytest`. Fixed to
+  `from conftest import ...` like the rest of the suite. Locally, `python -P -m pytest`
+  reproduces what CI runs.
+- **Stale vol panel was silently used.** `PanelVolForecast` returned the last row it had, so
+  a panel built in July sized an October book. It now refuses when any bar session falls
+  after the panel's last row (counted in sessions, so market closures pass). The panel ends
+  2026-07-24; `vol-momentum` with `--vol-source panel` refuses until `--build-vol-panel` is
+  re-run, in backtests as well as live.
+- **`stock-agent-daily`** — fetch, session, log to `data/state/daily/<date>.log`, then email
+  `CLEAN` / `ATTENTION` / `FAILED`. Emails clean runs too, as a heartbeat. A failed fetch
+  skips the session. Refuses to run without email settings unless `--no-email`, and never
+  passes a kill-switch reset through.
+- **`--broker fake` state moved to `data/state/fake/`**, so smoke tests cannot add to the
+  session record the gate counts or trip the real kill switch.
+- `feat/vol-targeted-momentum` deleted (fully merged); GitHub now deletes branches on merge.
+  `.env` created with the alert addresses; secrets left blank.
+
+### Next steps — to the first of thirty sessions
+
+1. **Fill `.env`:** `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` from the Alpaca **paper**
+   account, and `ALERT_SMTP_PASSWORD` as a Gmail app password (needs 2-step verification).
+2. **Refresh bars:** `stock-agent --fetch --refetch`. The cache ends 2026-08-06.
+3. **Dry run against paper:** `stock-agent-session --strategy equal`. First contact between
+   the adapter and real Alpaca responses — read the whole report.
+4. **First armed session by hand:** `stock-agent-session --strategy equal --submit`, then
+   check the positions in Alpaca's dashboard against the report.
+5. **Test the email:** `stock-agent-daily --strategy equal` (dry) and confirm it arrives.
+6. **Schedule it:** Task Scheduler, weekdays after the US close,
+   `venv\Scripts\stock-agent-daily.exe --submit --strategy equal`.
+7. **Thirty clean sessions**, counted from `data/state/sessions.jsonl`. Any `ATTENTION` or
+   `FAILED` email gets diagnosed before the count continues.
+
+`equal` rather than `vol-momentum` because the gate measures plumbing, and equal weight has
+no hand-rebuilt artefact that can go stale mid-run.

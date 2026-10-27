@@ -18,17 +18,18 @@ no code exists for it.
 | 1 | Volatility forecast vs EWMA / HAR-RV | cleared |
 | 2 | Cost-aware event-driven backtester | cleared |
 | 3 | 12-2 momentum + vol-targeted sizing | **gate failed** |
-| 4 | Broker interface, reconciliation, the live session path | code in progress — gate 0 / 30 |
+| 4 | Broker interface, reconciliation, the live session path | paper trading — gate 0 / 30 |
 
 365 tests pass, `ruff` clean, `mypy` clean over the gated scope.
 
 Phase 4 delivered so far: the broker vocabulary and Protocol, a crash-capable fake, the
 write-ahead order log and recovery, the reconciler, the drawdown kill switch, the pre-trade
 veto, the Alpaca adapter, the session runner, and a scheduled daily run that emails its
-outcome. The **gate is untouched at zero of thirty sessions**,
-because nothing has run against a funded account — "in progress" describes the code, and
-the gate describes the operating record. Those are different claims and the table keeps
-them apart on purpose.
+outcome. The paper account was funded into equal weight by hand on 2026-10-27 — 82 orders,
+all allowed, all accepted. The **gate is still zero of thirty**, because the gate counts
+clean *unattended* sessions and that one had an operator at the terminal; the count starts
+with the first scheduled run. "Paper trading" describes the account, and the gate describes
+the operating record. Those are different claims and the table keeps them apart on purpose.
 
 ### The governing decision (2026-09-13)
 
@@ -782,3 +783,53 @@ scheduled run. 346 tests → 365, `ruff` and `mypy` clean, CI green on `main`.
 
 `equal` rather than `vol-momentum` because the gate measures plumbing, and equal weight has
 no hand-rebuilt artefact that can go stale mid-run.
+
+---
+
+## Session record — 2026-10-27
+
+Worked through steps 1–4 of the list above: first contact with the paper account, and the
+first armed session. 365 tests, `ruff` and `mypy` clean.
+
+- **Stale keys in the Windows user environment.** The first dry run failed with a 401. A
+  second `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` pair was set at Windows *user* level, and
+  `load_dotenv()` does not override variables already present, so the stale pair beat
+  `.env`. Tested both pairs read-only against `/v2/account`: user-level 401, `.env` 200.
+  The user-level pair is deleted. Any terminal opened before that still carries it.
+- **Bars refetched** to 2026-10-26 (83 tickers, 0 failed) after the staleness guard refused
+  an 11-day-old cache, which is the guard doing its job.
+- **Error messages named `pipeline.py --…`**, which stopped being runnable when the repo
+  became a package. All now name `stock-agent`.
+- **`stock-agent-session` now defaults to `--strategy equal`**, not `vol-momentum`.
+  `stock-agent-daily` passes the flag through, so it inherits the default. A forgotten flag
+  could otherwise swap the book the gate is counting, mid-run.
+- **Dry run clean:** NAV $100,000.00 from the broker, marks disagree 0.000%, 82 intents,
+  coverage 1.0, veto allowed all 82.
+- **First armed session**, 2026-10-27 07:07 ET, session date 2026-10-26: 82 market `day`
+  buys sent, all 82 open at Alpaca with this session's ids, none missing or duplicated.
+  Queued before the open, so they fill at 09:30 ET. `clean: True`, fill poll "82 still
+  working", which is expected before the open.
+
+`sessions.jsonl` also holds two `failed` lines for session date 2026-10-16: the 401 and the
+staleness refusal. They stay. A failure that left no trace would read as a quiet day.
+
+### Next steps
+
+1. **After 09:30 ET, settle the fills:** `stock-agent-session` (dry, from a fresh terminal).
+   Expect 82 resolved and few or no new intents. Check the positions in Alpaca's dashboard
+   against the report.
+2. **Test the email:** `stock-agent-daily` (dry) and confirm the `CLEAN` mail arrives.
+3. **Schedule it:** Task Scheduler, weekdays after the US close,
+   `venv\Scripts\stock-agent-daily.exe --submit --strategy equal`. Keep the flag explicit
+   even though it is now the default. Trigger it once by hand from Task Scheduler, because
+   a scheduled task runs without a terminal's environment and working directory.
+4. **Thirty clean unattended sessions**, counted from `sessions.jsonl`.
+
+### Parked for after the gate
+
+**Copy Berkshire's 13F holdings as a strategy.** It would be a deterministic `Strategy`,
+not an agent, because no LLM goes in the money path. Its point-in-time history comes free
+with the filing dates. Its problems: a 45-day filing lag, only US-listed equities,
+concentration the 10% name and 30% sector caps would clip, and names outside the 82. The
+bar it has to clear, after costs, is BRK.B itself, not only equal weight. Write that gate
+down before the first backtest.

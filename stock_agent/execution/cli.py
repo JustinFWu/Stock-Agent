@@ -157,8 +157,10 @@ def _parse_args() -> argparse.Namespace:
                         help="Which venue to run against (default alpaca-paper)")
     parser.add_argument("--submit", action="store_true",
                         help="Actually send the orders the veto allows. Off by default.")
-    parser.add_argument("--strategy", choices=STRATEGIES, default="vol-momentum",
-                        help="Which strategy forms the target (default vol-momentum)")
+    # equal, not vol-momentum: the Phase 4 gate measures plumbing, and a forgotten flag must
+    # not swap the book being counted for one with a hand-rebuilt artefact that goes stale.
+    parser.add_argument("--strategy", choices=STRATEGIES, default="equal",
+                        help="Which strategy forms the target (default equal)")
     parser.add_argument("--vol-source", choices=VOL_SOURCES, default="panel",
                         help="Where vol-momentum gets its forecast (default panel)")
     parser.add_argument("--vol-target", type=float, default=None,

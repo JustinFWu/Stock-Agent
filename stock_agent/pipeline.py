@@ -1,11 +1,11 @@
 """
 Entry point.
 
-    python pipeline.py --fetch           # Phase 0: pull ~20y of adjusted bars for the universe
-    python pipeline.py --vol-validate    # Phase 1 gate: xgb vs rw / ewma / har-rv
-    python pipeline.py --train-vol       # fit and save the production forecaster
-    python pipeline.py --build-vol-panel # Phase 3: walk-forward vol forecasts for the backtest
-    python pipeline.py --backtest --strategy vol-momentum   # Phase 3: the strategy
+    stock-agent --fetch           # Phase 0: pull ~20y of adjusted bars for the universe
+    stock-agent --vol-validate    # Phase 1 gate: xgb vs rw / ewma / har-rv
+    stock-agent --train-vol       # fit and save the production forecaster
+    stock-agent --build-vol-panel # Phase 3: walk-forward vol forecasts for the backtest
+    stock-agent --backtest --strategy vol-momentum   # Phase 3: the strategy
 
 --strategy picks what is being measured and --baseline what it is measured against.
 The Phase 3 gate needs two runs: vol-momentum against equal for the information

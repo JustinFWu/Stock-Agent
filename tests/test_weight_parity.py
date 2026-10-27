@@ -186,7 +186,7 @@ def real_panel():
     except ValueError:
         # The loader raises when nothing is cached at all — the skip below has to
         # come after this, not instead of it, or the gate errors on a fresh clone.
-        pytest.skip("bar cache is empty — run `pipeline.py --fetch` first")
+        pytest.skip("bar cache is empty — run `stock-agent --fetch` first")
     if len(panel.tickers) < 10:
         pytest.skip("bar cache is too sparse to run the real-data gate")
     if pd.Timestamp(REAL_GATE_DATE) not in panel.dates:

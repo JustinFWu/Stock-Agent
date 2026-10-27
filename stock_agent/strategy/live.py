@@ -71,7 +71,7 @@ def _check_live_data(panel: PricePanel, as_of, universe: UniverseSpec, min_histo
         raise ValueError(
             f"The panel's most recent session is {as_of.date()}, {age_days} days old "
             f"(limit {max_staleness_days}). Refusing to form live weights from a stale "
-            "cache — run `pipeline.py --fetch --refetch`. Pass an explicit as_of to "
+            "cache — run `stock-agent --fetch --refetch`. Pass an explicit as_of to "
             "replay a historical session deliberately.")
 
     # One updated ticker is enough to advance the panel's last date while every stale name

@@ -90,7 +90,7 @@ def load_price_panel(tickers: list[str]) -> PricePanel:
             columns[field][ticker] = bars[field]
 
     if not columns["Close"]:
-        raise ValueError("No cached bars for any requested ticker — run `pipeline.py --fetch` first.")
+        raise ValueError("No cached bars for any requested ticker — run `stock-agent --fetch` first.")
     if missing:
         print(f"  panel: no cached bars for {', '.join(missing)} — excluded")
 

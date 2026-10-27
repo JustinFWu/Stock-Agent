@@ -182,7 +182,7 @@ def prepare(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     if missing:
         raise ValueError(
             f"Frame is missing required columns {missing}. Rebuild the feature cache "
-            "(`pipeline.py --vol-validate --rebuild`) instead of fitting on a subset — "
+            "(`stock-agent --vol-validate --rebuild`) instead of fitting on a subset — "
             "a narrowed feature set is a different model wearing the same name.")
 
     feature_cols = list(VOL_FEATURES)
@@ -391,7 +391,7 @@ def load_oos_vol_panel() -> pd.DataFrame:
     if not OOS_VOL_PANEL_PATH.exists():
         raise FileNotFoundError(
             f"No out-of-sample vol panel at {OOS_VOL_PANEL_PATH}. Build it with "
-            "`pipeline.py --build-vol-panel` before backtesting a vol-targeted strategy.")
+            "`stock-agent --build-vol-panel` before backtesting a vol-targeted strategy.")
     return pd.read_parquet(OOS_VOL_PANEL_PATH)
 
 
